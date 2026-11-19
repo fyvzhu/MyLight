@@ -1,0 +1,5 @@
+max_episodes: 3000
+
+sumo:
+  # Simulation backend: libsumo or traci. Both use SUMO 1.16.0.
+  backend: libsumo

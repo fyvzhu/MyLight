@@ -1,17 +1,17 @@
-import traci
 import numpy as np
 
 from collections import OrderedDict
 
 
 class Tls:
-    def __init__(self, tls_id, tls_config_data):
+    def __init__(self, tls_id, tls_config_data, simulator):
         """
 
         @rtype: object
         """
         self.tls_id = tls_id
         self.config_data = tls_config_data
+        self.simulator = simulator
 
         self.incoming_lane_list = None
         self.outgoing_lane_list = None
@@ -281,13 +281,13 @@ class Tls:
                 phase_code.append('y')
 
         phase_code = ''.join(phase_code)
-        traci.trafficlight.setRedYellowGreenState(self.tls_id, phase_code)
-        traci.trafficlight.setPhaseDuration(self.tls_id, duration)
+        self.simulator.trafficlight.setRedYellowGreenState(self.tls_id, phase_code)
+        self.simulator.trafficlight.setPhaseDuration(self.tls_id, duration)
 
     def set_green_phase(self, action, duration):
         phase_code = self.action_space[action]
-        traci.trafficlight.setRedYellowGreenState(self.tls_id, phase_code)
-        traci.trafficlight.setPhaseDuration(self.tls_id, duration)
+        self.simulator.trafficlight.setRedYellowGreenState(self.tls_id, phase_code)
+        self.simulator.trafficlight.setPhaseDuration(self.tls_id, duration)
 
     def observe_nodes(self):
         """
@@ -317,15 +317,15 @@ class Tls:
                      num_halting_veh_out_lane_list) = [], [], [], [], [], []
 
                     for in_lane in list(in_lanes_set):
-                        length_in_lane_list.append(traci.lane.getLength(in_lane))
-                        num_veh_in_lane_list.append(traci.lane.getLastStepVehicleNumber(in_lane))
-                        num_halting_veh_in_lane_list.append(np.clip(traci.lane.getLastStepHaltingNumber(in_lane), 0, 8))
+                        length_in_lane_list.append(self.simulator.lane.getLength(in_lane))
+                        num_veh_in_lane_list.append(self.simulator.lane.getLastStepVehicleNumber(in_lane))
+                        num_halting_veh_in_lane_list.append(np.clip(self.simulator.lane.getLastStepHaltingNumber(in_lane), 0, 8))
 
                     for out_lane in list(out_lanes_set):
-                        length_out_lane_list.append(traci.lane.getLength(out_lane))
-                        num_veh_out_lane_list.append(traci.lane.getLastStepVehicleNumber(out_lane))
+                        length_out_lane_list.append(self.simulator.lane.getLength(out_lane))
+                        num_veh_out_lane_list.append(self.simulator.lane.getLastStepVehicleNumber(out_lane))
                         num_halting_veh_out_lane_list.append(
-                            np.clip(traci.lane.getLastStepHaltingNumber(out_lane), 0, 8))
+                            np.clip(self.simulator.lane.getLastStepHaltingNumber(out_lane), 0, 8))
 
                     length_in_mean = np.mean(length_in_lane_list)
                     num_veh_in_mean = np.mean(num_veh_in_lane_list)
@@ -361,12 +361,12 @@ class Tls:
         for movement in self.traffic_movement_list:
             in_lane, out_lane = movement
 
-            length_in = traci.lane.getLength(in_lane) / 200
-            length_out = traci.lane.getLength(out_lane) / 200
-            num_veh_in = traci.lane.getLastStepVehicleNumber(in_lane) / 24
-            num_veh_out = traci.lane.getLastStepVehicleNumber(out_lane) / 24
-            num_halting_veh_in = np.clip(traci.lane.getLastStepHaltingNumber(in_lane), 0, 8) / 10
-            num_halting_veh_out = np.clip(traci.lane.getLastStepHaltingNumber(out_lane), 0, 8) / 10
+            length_in = self.simulator.lane.getLength(in_lane) / 200
+            length_out = self.simulator.lane.getLength(out_lane) / 200
+            num_veh_in = self.simulator.lane.getLastStepVehicleNumber(in_lane) / 24
+            num_veh_out = self.simulator.lane.getLastStepVehicleNumber(out_lane) / 24
+            num_halting_veh_in = np.clip(self.simulator.lane.getLastStepHaltingNumber(in_lane), 0, 8) / 10
+            num_halting_veh_out = np.clip(self.simulator.lane.getLastStepHaltingNumber(out_lane), 0, 8) / 10
 
             observation.append([length_in, length_out, num_veh_in, num_veh_out, num_halting_veh_in, num_halting_veh_out])
 
@@ -380,7 +380,7 @@ class Tls:
         3. The number of moving vehicles in the incoming lane and connected outgoing lane
         """
         observation = []
-        real_phase_code = traci.trafficlight.getRedYellowGreenState(self.tls_id)
+        real_phase_code = self.simulator.trafficlight.getRedYellowGreenState(self.tls_id)
         phase_code = self.valid_phase_list[self.action_space.index(real_phase_code)]
         for i, movement in enumerate(self.traffic_movement_list):
             in_lane, out_lane = movement
@@ -396,33 +396,33 @@ class Tls:
             # For most cases, there is no replaced lane dict
             if len(self.replaced_lane_dict) == 0:
                 if max_distance is None:
-                    num_veh_stopped_in = traci.lane.getLastStepHaltingNumber(in_lane)
-                    num_veh_stopped_out = traci.lane.getLastStepHaltingNumber(out_lane)
-                    num_veh_moving_in = (traci.lane.getLastStepVehicleNumber(in_lane) - traci.lane.getLastStepHaltingNumber(in_lane))
-                    num_veh_moving_out = (traci.lane.getLastStepVehicleNumber(out_lane) - traci.lane.getLastStepHaltingNumber(out_lane))
+                    num_veh_stopped_in = self.simulator.lane.getLastStepHaltingNumber(in_lane)
+                    num_veh_stopped_out = self.simulator.lane.getLastStepHaltingNumber(out_lane)
+                    num_veh_moving_in = (self.simulator.lane.getLastStepVehicleNumber(in_lane) - self.simulator.lane.getLastStepHaltingNumber(in_lane))
+                    num_veh_moving_out = (self.simulator.lane.getLastStepVehicleNumber(out_lane) - self.simulator.lane.getLastStepHaltingNumber(out_lane))
 
                 else:
                     # Calculate the count of moving vehicles and stopped vehicles on the incoming lane
                     num_veh_moving_in, num_veh_stopped_in = 0, 0
-                    in_lane_veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+                    in_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
                     in_lane_Length = self.lane_length_dict[in_lane]
                     for v in in_lane_veh_list:
-                        veh_pos = traci.vehicle.getLanePosition(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
                         if (in_lane_Length - veh_pos) <= max_distance:
                             # vehicle speed smaller than 0.2 m/s will be considered as stopped
-                            if traci.vehicle.getSpeed(v) < 0.2:
+                            if self.simulator.vehicle.getSpeed(v) < 0.2:
                                 num_veh_stopped_in += 1
                             else:
                                 num_veh_moving_in += 1
 
                     # Calculate the count of moving vehicles and stopped vehicles on the outgoing lane
                     num_veh_moving_out, num_veh_stopped_out = 0, 0
-                    out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                    out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                     out_lane_length = self.lane_length_dict[out_lane]
                     for v in out_lane_veh_list:
-                        veh_pos = traci.vehicle.getLanePosition(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
                         if (out_lane_length - veh_pos) <= max_distance:
-                            if traci.vehicle.getSpeed(v) < 0.2:
+                            if self.simulator.vehicle.getSpeed(v) < 0.2:
                                 num_veh_stopped_out += 1
                             else:
                                 num_veh_moving_out += 1
@@ -431,60 +431,60 @@ class Tls:
             else:
                 if max_distance is None:
                     if in_lane not in self.replaced_lane_dict:
-                        num_veh_stopped_in = traci.lane.getLastStepHaltingNumber(in_lane)
-                        num_veh_moving_in = (traci.lane.getLastStepVehicleNumber(in_lane) - traci.lane.getLastStepHaltingNumber(in_lane))
+                        num_veh_stopped_in = self.simulator.lane.getLastStepHaltingNumber(in_lane)
+                        num_veh_moving_in = (self.simulator.lane.getLastStepVehicleNumber(in_lane) - self.simulator.lane.getLastStepHaltingNumber(in_lane))
                     else:
                         num_veh_stopped_in, num_veh_moving_in = 0, 0
                         for replaced_lane in self.replaced_lane_dict[in_lane]:
-                            num_veh_stopped_in += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                            num_veh_moving_in += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
+                            num_veh_stopped_in += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                            num_veh_moving_in += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
 
                     if out_lane not in self.replaced_lane_dict:
-                        num_veh_stopped_out = traci.lane.getLastStepHaltingNumber(out_lane)
-                        num_veh_moving_out = (traci.lane.getLastStepVehicleNumber(out_lane) - traci.lane.getLastStepHaltingNumber(out_lane))
+                        num_veh_stopped_out = self.simulator.lane.getLastStepHaltingNumber(out_lane)
+                        num_veh_moving_out = (self.simulator.lane.getLastStepVehicleNumber(out_lane) - self.simulator.lane.getLastStepHaltingNumber(out_lane))
 
                     else:
                         num_veh_stopped_out, num_veh_moving_out = 0, 0
                         for replaced_lane in self.replaced_lane_dict[out_lane]:
-                            num_veh_stopped_out += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                            num_veh_moving_out += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
+                            num_veh_stopped_out += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                            num_veh_moving_out += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
 
                 else:
                     num_veh_stopped_in, num_veh_moving_in = 0, 0
                     if in_lane not in self.replaced_lane_dict:
                         # Need to check the vehicle distance
-                        in_lane_veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+                        in_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
                         in_lane_Length = self.lane_length_dict[in_lane]
                         for v in in_lane_veh_list:
-                            veh_pos = traci.vehicle.getLanePosition(v)
+                            veh_pos = self.simulator.vehicle.getLanePosition(v)
                             if (in_lane_Length - veh_pos) <= max_distance:
                                 # vehicle speed smaller than 0.2 m/s will be considered as stopped
-                                if traci.vehicle.getSpeed(v) < 0.2:
+                                if self.simulator.vehicle.getSpeed(v) < 0.2:
                                     num_veh_stopped_in += 1
                                 else:
                                     num_veh_moving_in += 1
                     else:
                         # All replaced lanes are shorter than 200m, do not need to check distance here
                         for replaced_lane in self.replaced_lane_dict[in_lane]:
-                            num_veh_stopped_in += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                            num_veh_moving_in += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
+                            num_veh_stopped_in += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                            num_veh_moving_in += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
 
                     num_veh_stopped_out, num_veh_moving_out = 0, 0
                     if out_lane not in self.replaced_lane_dict:
-                        out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                        out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                         out_lane_length = self.lane_length_dict[out_lane]
                         for v in out_lane_veh_list:
-                            veh_pos = traci.vehicle.getLanePosition(v)
+                            veh_pos = self.simulator.vehicle.getLanePosition(v)
                             if (out_lane_length - veh_pos) <= max_distance:
-                                if traci.vehicle.getSpeed(v) < 0.2:
+                                if self.simulator.vehicle.getSpeed(v) < 0.2:
                                     num_veh_stopped_out += 1
                                 else:
                                     num_veh_moving_out += 1
 
                     else:
                         for replaced_lane in self.replaced_lane_dict[out_lane]:
-                            num_veh_stopped_out += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                            num_veh_moving_out += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
+                            num_veh_stopped_out += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                            num_veh_moving_out += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
 
             # State normalization
             num_veh_moving_in /= 20
@@ -508,10 +508,10 @@ class Tls:
         4. The occupancy (the percentage of space the detector was occupied by a vehicle [%]) in the incoming lane and outgoing lane
         5. The state of the outgoing lane (0/not controlled by traffic lights, 1/controlled by traffic lights)
         """
-        all_detector_list = traci.lanearea.getIDList()
+        all_detector_list = self.simulator.lanearea.getIDList()
 
         observation = []
-        real_phase_code = traci.trafficlight.getRedYellowGreenState(self.tls_id)
+        real_phase_code = self.simulator.trafficlight.getRedYellowGreenState(self.tls_id)
         phase_code = self.valid_phase_list[self.action_space.index(real_phase_code)]
         for i, movement in enumerate(self.traffic_movement_list):
             in_lane, out_lane = movement
@@ -527,27 +527,27 @@ class Tls:
                 phase_signal = 0
 
             # Calculate the count of vehicles on the incoming lane-area detectors
-            num_veh_stopped_in = traci.lanearea.getLastStepHaltingNumber(in_detector)
-            num_veh_moving_in = (traci.lanearea.getLastStepVehicleNumber(in_detector) - num_veh_stopped_in)
-            num_veh_occ_in = traci.lanearea.getLastStepOccupancy(in_detector) / 100
+            num_veh_stopped_in = self.simulator.lanearea.getLastStepHaltingNumber(in_detector)
+            num_veh_moving_in = (self.simulator.lanearea.getLastStepVehicleNumber(in_detector) - num_veh_stopped_in)
+            num_veh_occ_in = self.simulator.lanearea.getLastStepOccupancy(in_detector) / 100
 
             # Calculate the count of vehicles on the outgoing lane-area detectors
             if out_detector in all_detector_list:
-                num_veh_stopped_out = traci.lanearea.getLastStepHaltingNumber(out_detector)
-                num_veh_moving_out = (traci.lanearea.getLastStepVehicleNumber(out_detector) - num_veh_stopped_out)
-                num_veh_occ_out = traci.lanearea.getLastStepOccupancy(out_detector) / 100
+                num_veh_stopped_out = self.simulator.lanearea.getLastStepHaltingNumber(out_detector)
+                num_veh_moving_out = (self.simulator.lanearea.getLastStepVehicleNumber(out_detector) - num_veh_stopped_out)
+                num_veh_occ_out = self.simulator.lanearea.getLastStepOccupancy(out_detector) / 100
                 out_lane_state = 1
 
             else:
                 # For ma2c dataset, the default detection range is 50m
                 distance = 50
                 out_lane_length = self.lane_length_dict[out_lane]
-                out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                 num_veh_stopped_out, num_veh_moving_out, num_veh_occ_out, lane_veh_length = 0, 0, 0, 0
                 for v in out_lane_veh_list:
-                    veh_speed = traci.vehicle.getSpeed(v)
-                    veh_length = traci.vehicle.getLength(v)
-                    veh_pos = traci.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
+                    veh_length = self.simulator.vehicle.getLength(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
                     if (out_lane_length - veh_pos) <= distance:
                         if veh_speed < 0.1:
                             num_veh_stopped_out += 1
@@ -583,7 +583,7 @@ class Tls:
         distance = 50
 
         observation = []
-        real_phase_code = traci.trafficlight.getRedYellowGreenState(self.tls_id)
+        real_phase_code = self.simulator.trafficlight.getRedYellowGreenState(self.tls_id)
         phase_code = self.valid_phase_list[self.action_space.index(real_phase_code)]
         for i, movement in enumerate(self.traffic_movement_list):
             in_lane, out_lane = movement
@@ -600,12 +600,12 @@ class Tls:
             num_veh_stopped_in, num_veh_moving_in, veh_occ_in = 0, 0, 0
             if in_lane not in self.replaced_lane_dict:
                 # Need to check the vehicle distance
-                in_lane_veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+                in_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
                 in_lane_Length = self.lane_length_dict[in_lane]
                 for v in in_lane_veh_list:
-                    veh_pos = traci.vehicle.getLanePosition(v)
-                    veh_speed = traci.vehicle.getSpeed(v)
-                    veh_length = traci.vehicle.getLength(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
+                    veh_length = self.simulator.vehicle.getLength(v)
                     if (in_lane_Length - veh_pos) <= distance:
                         # vehicle speed smaller than 0.1 m/s will be considered as stopped
                         if veh_speed < 0.1:
@@ -616,21 +616,21 @@ class Tls:
             else:
                 # All replaced lanes are shorter than 200m, do not need to check distance here
                 for replaced_lane in self.replaced_lane_dict[in_lane]:
-                    num_veh_stopped_in += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                    num_veh_moving_in += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
-                    in_veh_list = traci.lane.getLastStepVehicleIDs(replaced_lane)
+                    num_veh_stopped_in += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                    num_veh_moving_in += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
+                    in_veh_list = self.simulator.lane.getLastStepVehicleIDs(replaced_lane)
                     for v in in_veh_list:
-                        veh_length = traci.vehicle.getLength(v)
+                        veh_length = self.simulator.vehicle.getLength(v)
                         veh_occ_in += veh_length
 
             num_veh_stopped_out, num_veh_moving_out, veh_occ_out = 0, 0, 0
             if out_lane not in self.replaced_lane_dict:
-                out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                 out_lane_length = self.lane_length_dict[out_lane]
                 for v in out_lane_veh_list:
-                    veh_pos = traci.vehicle.getLanePosition(v)
-                    veh_speed = traci.vehicle.getSpeed(v)
-                    veh_length = traci.vehicle.getLength(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
+                    veh_length = self.simulator.vehicle.getLength(v)
                     if (out_lane_length - veh_pos) <= distance:
                         if veh_speed < 0.1:
                             num_veh_stopped_out += 1
@@ -639,11 +639,11 @@ class Tls:
                         veh_occ_out += veh_length
             else:
                 for replaced_lane in self.replaced_lane_dict[out_lane]:
-                    num_veh_stopped_out += traci.lane.getLastStepHaltingNumber(replaced_lane)
-                    num_veh_moving_out += (traci.lane.getLastStepVehicleNumber(replaced_lane) - traci.lane.getLastStepHaltingNumber(replaced_lane))
-                    out_veh_list = traci.lane.getLastStepVehicleIDs(replaced_lane)
+                    num_veh_stopped_out += self.simulator.lane.getLastStepHaltingNumber(replaced_lane)
+                    num_veh_moving_out += (self.simulator.lane.getLastStepVehicleNumber(replaced_lane) - self.simulator.lane.getLastStepHaltingNumber(replaced_lane))
+                    out_veh_list = self.simulator.lane.getLastStepVehicleIDs(replaced_lane)
                     for v in out_veh_list:
-                        veh_length = traci.vehicle.getLength(v)
+                        veh_length = self.simulator.vehicle.getLength(v)
                         veh_occ_out += veh_length
 
             # State normalization
@@ -672,10 +672,10 @@ class Tls:
         6. The occupancy (the percentage of space the detector was occupied by a vehicle [%]) in the incoming lane and outgoing lane
         7. The state of the outgoing lane (0/not controlled by traffic lights, 1/controlled by traffic lights)
         """
-        all_detector_list = traci.lanearea.getIDList()
+        all_detector_list = self.simulator.lanearea.getIDList()
 
         observation = []
-        real_phase_code = traci.trafficlight.getRedYellowGreenState(self.tls_id)
+        real_phase_code = self.simulator.trafficlight.getRedYellowGreenState(self.tls_id)
         phase_code = self.valid_phase_list[self.action_space.index(real_phase_code)]
         flow_rate_in_lane, flow_rate_out_lane = self.get_lane_flow_rate()
         for i, movement in enumerate(self.traffic_movement_list):
@@ -693,30 +693,30 @@ class Tls:
 
             # Calculate the count of vehicles on the incoming lane-area detectors
             flow_rate_in = flow_rate_in_lane[in_lane]
-            queue_length_in = traci.lanearea.getJamLengthMeters(in_detector)
-            num_veh_stopped_in = traci.lanearea.getLastStepHaltingNumber(in_detector)
-            num_veh_moving_in = (traci.lanearea.getLastStepVehicleNumber(in_detector) - num_veh_stopped_in)
-            num_veh_occ_in = traci.lanearea.getLastStepOccupancy(in_detector) / 100
+            queue_length_in = self.simulator.lanearea.getJamLengthMeters(in_detector)
+            num_veh_stopped_in = self.simulator.lanearea.getLastStepHaltingNumber(in_detector)
+            num_veh_moving_in = (self.simulator.lanearea.getLastStepVehicleNumber(in_detector) - num_veh_stopped_in)
+            num_veh_occ_in = self.simulator.lanearea.getLastStepOccupancy(in_detector) / 100
 
             # Calculate the count of vehicles on the outgoing lane-area detectors
             flow_rate_out = flow_rate_out_lane[out_lane]
             if out_detector in all_detector_list:
-                queue_length_out  = traci.lanearea.getJamLengthMeters(out_detector)
-                num_veh_stopped_out = traci.lanearea.getLastStepHaltingNumber(out_detector)
-                num_veh_moving_out = (traci.lanearea.getLastStepVehicleNumber(out_detector) - num_veh_stopped_out)
-                num_veh_occ_out = traci.lanearea.getLastStepOccupancy(out_detector) / 100
+                queue_length_out  = self.simulator.lanearea.getJamLengthMeters(out_detector)
+                num_veh_stopped_out = self.simulator.lanearea.getLastStepHaltingNumber(out_detector)
+                num_veh_moving_out = (self.simulator.lanearea.getLastStepVehicleNumber(out_detector) - num_veh_stopped_out)
+                num_veh_occ_out = self.simulator.lanearea.getLastStepOccupancy(out_detector) / 100
                 out_lane_state = 1
 
             else:
                 # The default detection range is 50m
                 distance = 50
                 out_lane_length = self.lane_length_dict[out_lane]
-                out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                 num_veh_stopped_out, num_veh_moving_out, num_veh_occ_out, lane_veh_length = 0, 0, 0, 0
                 for v in out_lane_veh_list:
-                    veh_speed = traci.vehicle.getSpeed(v)
-                    veh_length = traci.vehicle.getLength(v)
-                    veh_pos = traci.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
+                    veh_length = self.simulator.vehicle.getLength(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
                     if (out_lane_length - veh_pos) <= distance:
                         if veh_speed < 0.1:
                             num_veh_stopped_out += 1
@@ -774,18 +774,18 @@ class Tls:
             for lane in parti_lane_list:
                 if max_distance is None:
                     phase_obs.append([
-                        traci.lane.getLastStepVehicleNumber(lane) / 24,
-                        traci.lane.getLastStepHaltingNumber(lane) / 8
+                        self.simulator.lane.getLastStepVehicleNumber(lane) / 24,
+                        self.simulator.lane.getLastStepHaltingNumber(lane) / 8
                     ])
                 else:
                     lane_length = self.lane_length_dict[lane]
-                    veh_list = traci.lane.getLastStepVehicleIDs(lane)
+                    veh_list = self.simulator.lane.getLastStepVehicleIDs(lane)
                     num_veh, num_stopped_veh = 0, 0
                     for v in veh_list:
-                        veh_pos = traci.vehicle.getLanePosition(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
                         if (lane_length - veh_pos) <= max_distance:
                             num_veh += 1
-                            if traci.vehicle.getSpeed(v) < 0.2:
+                            if self.simulator.vehicle.getSpeed(v) < 0.2:
                                 num_stopped_veh += 1
                     phase_obs.append([num_veh / 24, num_stopped_veh / 8])
 
@@ -799,7 +799,7 @@ class Tls:
         1. The number of halting vehicles
         2. The number of moving vehicles
         """
-        all_detector_list = traci.lanearea.getIDList()
+        all_detector_list = self.simulator.lanearea.getIDList()
 
         links_incoming = []
         links_outgoing = []
@@ -827,9 +827,9 @@ class Tls:
 
             # Combine participating detectors and collect observations
             phase_obs = [
-                [traci.lanearea.getLastStepVehicleNumber(detector) / 10,
-                 traci.lanearea.getLastStepHaltingNumber(detector) / 10,
-                 traci.lanearea.getLastStepOccupancy(detector) / 100]
+                [self.simulator.lanearea.getLastStepVehicleNumber(detector) / 10,
+                 self.simulator.lanearea.getLastStepHaltingNumber(detector) / 10,
+                 self.simulator.lanearea.getLastStepOccupancy(detector) / 100]
                 for detector in list(in_lane_to_detector.values()) + list(out_lane_to_detector.values())
             ]
 
@@ -846,7 +846,7 @@ class Tls:
         If no detector is available on the outgoing lanes, the data can be substituted with lane attributes.
         """
         distance = 50
-        all_detector_list = traci.lanearea.getIDList()
+        all_detector_list = self.simulator.lanearea.getIDList()
 
         links_incoming = []
         links_outgoing = []
@@ -876,17 +876,17 @@ class Tls:
             phase_obs = []
             for detector in (list(in_lane_to_detector.values()) + list(out_lane_to_detector.values())):
                 if detector in all_detector_list:
-                    veh_occ = traci.lanearea.getLastStepOccupancy(detector) / 100
-                    num_veh_stopped = traci.lanearea.getLastStepHaltingNumber(detector) / 10
-                    num_veh_moving = (traci.lanearea.getLastStepVehicleNumber(detector) - num_veh_stopped) / 10
+                    veh_occ = self.simulator.lanearea.getLastStepOccupancy(detector) / 100
+                    num_veh_stopped = self.simulator.lanearea.getLastStepHaltingNumber(detector) / 10
+                    num_veh_moving = (self.simulator.lanearea.getLastStepVehicleNumber(detector) - num_veh_stopped) / 10
                 else:
                     num_veh_stopped, num_veh_moving, veh_occ = 0, 0, 0
                     lane_length = self.lane_length_dict[detector]
-                    lane_veh_list = traci.lane.getLastStepVehicleIDs(detector)
+                    lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(detector)
                     for v in lane_veh_list:
-                        veh_pos = traci.vehicle.getLanePosition(v)
-                        veh_speed = traci.vehicle.getSpeed(v)
-                        veh_length = traci.vehicle.getLength(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
+                        veh_speed = self.simulator.vehicle.getSpeed(v)
+                        veh_length = self.simulator.vehicle.getLength(v)
                         if (lane_length - veh_pos) <= distance:
                             if veh_speed < 0.1:
                                 num_veh_stopped += 1
@@ -916,11 +916,11 @@ class Tls:
         target_queue = np.zeros(len(self.incoming_lane_list))
         for i, (in_lane, detector) in enumerate(zip(self.incoming_lane_list, self.incoming_detector_list)):
             if lane:
-                target_queue[i] = traci.lane.getLastStepHaltingNumber(in_lane) / 24 \
-                    if norm else traci.lane.getLastStepHaltingNumber(in_lane)
+                target_queue[i] = self.simulator.lane.getLastStepHaltingNumber(in_lane) / 24 \
+                    if norm else self.simulator.lane.getLastStepHaltingNumber(in_lane)
             else:
-                target_queue[i] = traci.lanearea.getLastStepHaltingNumber(detector) / 7 \
-                    if norm else traci.lanearea.getLastStepHaltingNumber(detector)
+                target_queue[i] = self.simulator.lanearea.getLastStepHaltingNumber(detector) / 7 \
+                    if norm else self.simulator.lanearea.getLastStepHaltingNumber(detector)
 
         return target_queue.tolist()
 
@@ -936,7 +936,7 @@ class Tls:
         """
         Choose the phase that follows the pre-defined order
         """
-        curr_phase_code = traci.trafficlight.getRedYellowGreenState(self.tls_id)
+        curr_phase_code = self.simulator.trafficlight.getRedYellowGreenState(self.tls_id)
         next_action = (self.action_space.index(curr_phase_code) + 1) % self.action_space_n
 
         return next_action
@@ -953,9 +953,9 @@ class Tls:
                 if code.lower() == 'g':
                     if detector:
                         in_detector = self.lane_detector_dict[in_lane]
-                        r[i] += traci.lanearea.getLastStepHaltingNumber(in_detector)
+                        r[i] += self.simulator.lanearea.getLastStepHaltingNumber(in_detector)
                     else:
-                        r[i] += traci.lane.getLastStepHaltingNumber(in_lane)
+                        r[i] += self.simulator.lane.getLastStepHaltingNumber(in_lane)
 
         return np.argmax(r)
 
@@ -963,7 +963,7 @@ class Tls:
         """
         Choose the phase that can reduce the most phase pressure
         """
-        all_detector_list = traci.lanearea.getIDList()
+        all_detector_list = self.simulator.lanearea.getIDList()
 
         r = np.zeros(self.action_space_n)
         for i, phase in enumerate(self.valid_phase_list):
@@ -974,14 +974,14 @@ class Tls:
                         in_detector = self.lane_detector_dict[in_lane]
                         out_detector = self.lane_detector_dict[out_lane]
                         if out_detector in all_detector_list:
-                            r[i] += (traci.lanearea.getLastStepHaltingNumber(in_detector) -
-                                     traci.lanearea.getLastStepHaltingNumber(out_detector))
+                            r[i] += (self.simulator.lanearea.getLastStepHaltingNumber(in_detector) -
+                                     self.simulator.lanearea.getLastStepHaltingNumber(out_detector))
                         else:
-                            r[i] += (traci.lanearea.getLastStepHaltingNumber(in_detector) -
-                                     traci.lane.getLastStepHaltingNumber(out_lane))
+                            r[i] += (self.simulator.lanearea.getLastStepHaltingNumber(in_detector) -
+                                     self.simulator.lane.getLastStepHaltingNumber(out_lane))
                     else:
-                        r[i] += (traci.lane.getLastStepHaltingNumber(in_lane) -
-                                 traci.lane.getLastStepVehicleNumber(out_lane))
+                        r[i] += (self.simulator.lane.getLastStepHaltingNumber(in_lane) -
+                                 self.simulator.lane.getLastStepVehicleNumber(out_lane))
 
         return np.argmax(r)
 
@@ -993,16 +993,16 @@ class Tls:
         # if there are lane area detectors
         if detector:
             for i, detector in enumerate(self.incoming_detector_list):
-                queue.append(traci.lanearea.getLastStepHaltingNumber(detector) / 7)
+                queue.append(self.simulator.lanearea.getLastStepHaltingNumber(detector) / 7)
         else:
             for i, in_lane in enumerate(self.incoming_lane_list):
                 if in_lane not in self.replaced_lane_dict:
                     num_stopped_veh = 0
-                    lane_length = traci.lane.getLength(in_lane)
-                    veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+                    lane_length = self.simulator.lane.getLength(in_lane)
+                    veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
                     for v in veh_list:
-                        veh_pos = traci.vehicle.getLanePosition(v)
-                        veh_speed = traci.vehicle.getSpeed(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
+                        veh_speed = self.simulator.vehicle.getSpeed(v)
                         # Calculate the queue length for each incoming lane, if and only if the speed of the vehicle is
                         # lower than 0.2 m/s and the position is within the range of 50 meter near the intersection.
                         if veh_pos >= (lane_length - queue_range) and veh_speed <= 0.2:
@@ -1014,20 +1014,20 @@ class Tls:
                     # If the replaced lane is shorter than queue length detection range
                     if self.replaced_lane_length_dict[in_lane] <= queue_range:
                         for replaced_lane in self.replaced_lane_dict[in_lane]:
-                            veh_list = traci.lane.getLastStepVehicleIDs(replaced_lane)
+                            veh_list = self.simulator.lane.getLastStepVehicleIDs(replaced_lane)
                             for v in veh_list:
-                                if traci.vehicle.getSpeed(v) < 0.2:
+                                if self.simulator.vehicle.getSpeed(v) < 0.2:
                                     num_stopped_veh += 1
                                 else:
                                     pass
                     # If the replaced lane is larger than the queue length detection range, take the second lane segment,
                     # since the second lane segment is longer.
                     else:
-                        lane_length = traci.lane.getLength(self.replaced_lane_dict[in_lane][-1])
-                        veh_list = traci.lane.getLastStepVehicleIDs(self.replaced_lane_dict[in_lane][-1])
+                        lane_length = self.simulator.lane.getLength(self.replaced_lane_dict[in_lane][-1])
+                        veh_list = self.simulator.lane.getLastStepVehicleIDs(self.replaced_lane_dict[in_lane][-1])
                         for v in veh_list:
-                            veh_pos = traci.vehicle.getLanePosition(v)
-                            veh_speed = traci.vehicle.getSpeed(v)
+                            veh_pos = self.simulator.vehicle.getLanePosition(v)
+                            veh_speed = self.simulator.vehicle.getSpeed(v)
                             if veh_pos >= (lane_length - queue_range) and veh_speed <= 0.2:
                                 num_stopped_veh += 1
                             else:
@@ -1047,27 +1047,27 @@ class Tls:
         if not regional_reward:
             queue_reward = []
             for i, in_detector in enumerate(self.incoming_detector_list):
-                queue_reward.append(traci.lanearea.getLastStepHaltingNumber(in_detector) / 7)
+                queue_reward.append(self.simulator.lanearea.getLastStepHaltingNumber(in_detector) / 7)
             reward = -1 * np.mean(np.array(queue_reward))
         else:
             distance = 50
             in_queue_reward = []
             for i, in_detector in enumerate(self.incoming_detector_list):
-                in_queue_reward.append(traci.lanearea.getLastStepHaltingNumber(in_detector) / 7)
+                in_queue_reward.append(self.simulator.lanearea.getLastStepHaltingNumber(in_detector) / 7)
 
             out_queue_reward = []
-            all_detector_list = traci.lanearea.getIDList()
+            all_detector_list = self.simulator.lanearea.getIDList()
             for j, out_detector in enumerate(self.outgoing_detector_list):
                 if out_detector in all_detector_list:
-                    out_queue_reward.append(traci.lanearea.getLastStepHaltingNumber(out_detector) / 7)
+                    out_queue_reward.append(self.simulator.lanearea.getLastStepHaltingNumber(out_detector) / 7)
                 else:
                     queue = 0
                     out_lane = self.outgoing_lane_list[j]
                     out_lane_length = self.lane_length_dict[out_lane]
-                    veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                    veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                     for v in veh_list:
-                        veh_speed = traci.vehicle.getSpeed(v)
-                        veh_pos = traci.vehicle.getLanePosition(v)
+                        veh_speed = self.simulator.vehicle.getSpeed(v)
+                        veh_pos = self.simulator.vehicle.getLanePosition(v)
                         if (out_lane_length - veh_pos) <= distance:
                             if veh_speed < 0.2:
                                 queue += 1
@@ -1087,10 +1087,10 @@ class Tls:
             if in_lane not in self.replaced_lane_dict:
                 queue = 0
                 in_lane_length = self.lane_length_dict[in_lane]
-                in_lane_veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+                in_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
                 for v in in_lane_veh_list:
-                    veh_pos = traci.vehicle.getLanePosition(v)
-                    veh_speed = traci.vehicle.getSpeed(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
                     if (in_lane_length - veh_pos) <= distance:
                         if veh_speed < 0.2:
                             queue += 1
@@ -1099,9 +1099,9 @@ class Tls:
             else:
                 queue = 0
                 for replaced_lane in self.replaced_lane_dict[in_lane]:
-                    in_lane_veh_list = traci.lane.getLastStepVehicleIDs(replaced_lane)
+                    in_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(replaced_lane)
                     for v in in_lane_veh_list:
-                        veh_speed = traci.vehicle.getSpeed(v)
+                        veh_speed = self.simulator.vehicle.getSpeed(v)
                         if veh_speed < 0.2:
                             queue += 1
                 queue_reward_in.append(queue)
@@ -1114,10 +1114,10 @@ class Tls:
             for j, out_lane in enumerate(self.outgoing_lane_list):
                 queue = 0
                 out_lane_length = self.lane_length_dict[out_lane]
-                out_lane_veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+                out_lane_veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
                 for v in out_lane_veh_list:
-                    veh_pos = traci.vehicle.getLanePosition(v)
-                    veh_speed = traci.vehicle.getSpeed(v)
+                    veh_pos = self.simulator.vehicle.getLanePosition(v)
+                    veh_speed = self.simulator.vehicle.getSpeed(v)
                     if (out_lane_length - veh_pos) <= distance and veh_speed < 0.2:
                         queue += 1
                 queue_reward_out.append(queue)
@@ -1134,14 +1134,14 @@ class Tls:
         queue, wait = [], []
         for i, lane in enumerate(self.incoming_lane_list):
             num_stopped_veh = 0
-            lane_length = traci.lane.getLength(lane)
-            veh_list = traci.lane.getLastStepVehicleIDs(lane)
+            lane_length = self.simulator.lane.getLength(lane)
+            veh_list = self.simulator.lane.getLastStepVehicleIDs(lane)
             # Calculate the first vehicle at each incoming lane
             front_v = None
             front_pos = None
             for v in veh_list:
-                veh_speed = traci.vehicle.getSpeed(v)
-                veh_pos = traci.vehicle.getLanePosition(v)
+                veh_speed = self.simulator.vehicle.getSpeed(v)
+                veh_pos = self.simulator.vehicle.getLanePosition(v)
                 if front_v is None:
                     front_v = v
                     front_pos = veh_pos
@@ -1162,7 +1162,7 @@ class Tls:
 
             # Calculate waiting time for the first vehicle (near the intersection) at each incoming lane
             if front_v is not None and front_pos >= (lane_length - 15):
-                wait.append(np.clip(traci.vehicle.getWaitingTime(front_v) / wait_norm, 0, 1))
+                wait.append(np.clip(self.simulator.vehicle.getWaitingTime(front_v) / wait_norm, 0, 1))
             else:
                 wait.append(0)
         reward = -1 * (np.sum(queue) + np.sum(wait)) / 15
@@ -1177,10 +1177,10 @@ class Tls:
         for in_lane in self.incoming_lane_list:
             queue = 0
             lane_length = self.lane_length_dict[in_lane]
-            veh_list = traci.lane.getLastStepVehicleIDs(in_lane)
+            veh_list = self.simulator.lane.getLastStepVehicleIDs(in_lane)
             for v in veh_list:
-                veh_pos = traci.vehicle.getLanePosition(v)
-                if veh_pos > (lane_length - distance) and traci.vehicle.getSpeed(v) < 0.2:
+                veh_pos = self.simulator.vehicle.getLanePosition(v)
+                if veh_pos > (lane_length - distance) and self.simulator.vehicle.getSpeed(v) < 0.2:
                     queue += 1
                 else:
                     pass
@@ -1189,10 +1189,10 @@ class Tls:
         for out_lane in self.outgoing_lane_list:
             queue = 0
             lane_length = self.lane_length_dict[out_lane]
-            veh_list = traci.lane.getLastStepVehicleIDs(out_lane)
+            veh_list = self.simulator.lane.getLastStepVehicleIDs(out_lane)
             for v in veh_list:
-                veh_pos = traci.vehicle.getLanePosition(v)
-                if veh_pos > (lane_length - distance) and traci.vehicle.getSpeed(v) < 0.2:
+                veh_pos = self.simulator.vehicle.getLanePosition(v)
+                if veh_pos > (lane_length - distance) and self.simulator.vehicle.getSpeed(v) < 0.2:
                     queue += 1
                 else:
                     pass
@@ -1210,12 +1210,12 @@ class Tls:
         curr_veh_list_in_lane = dict()
         curr_veh_list_out_lane = dict()
         for i, in_lane in self.incoming_lane_list:
-            curr_veh_list_in_lane[in_lane] = traci.lane.getLastStepVehicleIDs(in_lane)
+            curr_veh_list_in_lane[in_lane] = self.simulator.lane.getLastStepVehicleIDs(in_lane)
             in_veh_in_lane = set(curr_veh_list_in_lane[in_lane]) - set(self.pre_veh_list_in_lane[in_lane])
             flow_rate_in_lane[in_lane] = len(in_veh_in_lane) / interval
 
         for i, out_lane in self.outgoing_lane_list:
-            curr_veh_list_out_lane[out_lane] = traci.lane.getLastStepVehicleIDs(out_lane)
+            curr_veh_list_out_lane[out_lane] = self.simulator.lane.getLastStepVehicleIDs(out_lane)
             in_veh_out_lane = set(curr_veh_list_out_lane[out_lane]) - set(self.pre_veh_list_out_lane[out_lane])
             flow_rate_out_lane[out_lane] = len(in_veh_out_lane) / interval
 

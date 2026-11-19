@@ -1,10 +1,24 @@
 import datetime
+from pathlib import Path as _Path
+import yaml as _yaml
+
+with _Path(__file__).with_name('config.yaml').open() as _config_file:
+    _config = _yaml.safe_load(_config_file)
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes'}
+        or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
+    raise ValueError('config.yaml must contain max_episodes and sumo.backend')
+_max_episodes = _config['max_episodes']
+if type(_max_episodes) is not int or _max_episodes < 1:
+    raise ValueError('max_episodes must be a positive integer')
+_sumo_backend = _config['sumo']['backend']
+if _sumo_backend not in ('traci', 'libsumo'):
+    raise ValueError('sumo.backend must be traci or libsumo')
 
 date = datetime.datetime.now()
 
 
 class INPUT_PARAMS:
-    MAX_EPISODES        = 3000
+    MAX_EPISODES        = _max_episodes
     NUM_META_AGENTS     = 6
     OBS_TYPE            = 'V1'  # ['V1', 'V2']
     UPDATE_TYPE         = 'PPO_MAC'
@@ -25,6 +39,7 @@ class EXPERIMENT_PARAMS:
 
 
 class SUMO_PARAMS:
+    BACKEND             = _sumo_backend
     # MA2C DATASETS: 'grid_network_5_5', 'monaco_network_30',
     # RESCO DATASETS: 'cologne_network_8', 'ingolstadt_network_21', 'arterial_network_4_4', 'grid_network_4_4'
     # GESA DATASETS: 'shaoxing_network_7', 'shenzhen_network_29', 'shenzhen_network_55'

@@ -1,6 +1,5 @@
 # coding=utf-8
 import gym
-import traci
 import numpy as np
 import xml.etree.ElementTree as ET
 
@@ -8,6 +7,7 @@ from abc import ABC
 from sumolib import checkBinary
 from parameters import *
 from env.tls import Tls
+from env.sumo import Simulator
 from utils import load_json
 from collections import OrderedDict
 from maps.net_simu_generator import gen_cfg_file
@@ -27,6 +27,7 @@ class MATSC_Env(gym.Env, ABC):
         self.start_simulation_step = None
 
         self.env_params = SUMO_PARAMS
+        self.simulator = Simulator(self.env_params.BACKEND)
 
         self.gui = self.env_params.GUI
         self.seed = self.env_params.SEED
@@ -99,6 +100,8 @@ class MATSC_Env(gym.Env, ABC):
         Initialize net configuration loader and load net configurations
         @return:
         """
+        self._phase_features = None
+        self._attribute_features = {}
         self.config_data = load_json(self.net_config_path)
 
         self.tls_list = self.rl_tls_list = list(self.config_data.keys())
@@ -106,7 +109,8 @@ class MATSC_Env(gym.Env, ABC):
 
         all_incoming_lane_list, all_outgoing_lane_list = [], []
         for tls in self.tls_list:
-            self.tls_dict[tls] = Tls(tls_id=tls, tls_config_data=self.config_data[tls])
+            self.tls_dict[tls] = Tls(tls_id=tls, tls_config_data=self.config_data[tls],
+                                     simulator=self.simulator)
             self.neighbor_dict[tls] = self.tls_dict[tls].neighbor_list
             self.incoming_lane_dict[tls] = self.tls_dict[tls].incoming_lane_list
             self.outgoing_lane_dict[tls] = self.tls_dict[tls].outgoing_lane_list
@@ -181,33 +185,29 @@ class MATSC_Env(gym.Env, ABC):
         # Generate new sumo configuration files when resetting the environment and launch new simulation
         gen_cfg_file(path=self.net_file_path, seed=seed, thread=self.server_number)
 
-        try:
-            if self.gui and (self.server_number == 0):
-                sumoBinary = checkBinary('sumo-gui')
-            else:
-                sumoBinary = checkBinary('sumo')
+        self._phase_features = None
+        self._attribute_features.clear()
+        if self.gui and (self.server_number == 0):
+            sumoBinary = checkBinary('sumo-gui')
+        else:
+            sumoBinary = checkBinary('sumo')
 
-            port = 6000 + self.server_number
-            traci.start(
-                [sumoBinary,
-                 "--configuration-file", self.sumo_file_path,
-                 "--tripinfo-output", self.trip_file_path,
-                 "--tripinfo-output.write-unfinished", str(write_unfinished),
-                 "--statistic-output", self.statistic_output_file_path,
-                 "--duration-log.statistics", 'False',
-                 "--start",
-                 "--quit-on-end",
-                 "--seed", str(seed),
-                 "--no-warnings", 'True',
-                 "--no-step-log", 'True',
-                 "--time-to-teleport", str(self.sumo_teleport_time)],
-                port=port)
-            return 0
-
-        except:
-
-            print("Was not able to start simulation\n")
-            return 1
+        port = 6000 + self.server_number
+        self.simulator.start(
+            [sumoBinary,
+             "--configuration-file", self.sumo_file_path,
+             "--tripinfo-output", self.trip_file_path,
+             "--tripinfo-output.write-unfinished", str(write_unfinished),
+             "--statistic-output", self.statistic_output_file_path,
+             "--duration-log.statistics", 'False',
+             "--start",
+             "--quit-on-end",
+             "--seed", str(seed),
+             "--no-warnings", 'True',
+             "--no-step-log", 'True',
+             "--time-to-teleport", str(self.sumo_teleport_time)],
+            port=port)
+        return 0
 
     def reset(self):
         """
@@ -282,7 +282,7 @@ class MATSC_Env(gym.Env, ABC):
             self.pre_actions_dict[tls] = None
         self.rl_step = 0
         self.sumo_step = 0
-        self.start_simulation_step = traci.simulation.getTime()
+        self.start_simulation_step = self.simulator.simulation.getTime()
 
     def step(self, action_dict):
         """
@@ -387,7 +387,7 @@ class MATSC_Env(gym.Env, ABC):
         @return:
         """
         self.sumo_step += 1
-        traci.simulationStep()
+        self.simulator.simulationStep()
         if self.test:
             self.measure_traffic_step()
 
@@ -476,9 +476,9 @@ class MATSC_Env(gym.Env, ABC):
         """
         activated_phase_index_dict = OrderedDict()
         for tls in self.rl_tls_list:
-            activated_phase = traci.trafficlight.getRedYellowGreenState(tls)
+            activated_phase = self.simulator.trafficlight.getRedYellowGreenState(tls)
             if activated_phase not in self.tls_dict[tls].action_space:
-                traci.trafficlight.setRedYellowGreenState(tls, self.tls_dict[tls].action_space[0])
+                self.simulator.trafficlight.setRedYellowGreenState(tls, self.tls_dict[tls].action_space[0])
                 activated_phase_index_dict[tls] = 0
             else:
                 activated_phase_index_dict[tls] = self.tls_dict[tls].action_space.index(activated_phase)
@@ -488,6 +488,8 @@ class MATSC_Env(gym.Env, ABC):
         """
         Get the phase vectors and phase masks for parameter-sharing learning
         """
+        if self._phase_features is not None:
+            return self._phase_features
         phase_vec_dict = OrderedDict()
         phase_mask_dict = OrderedDict()
         for tls in self.rl_tls_list:
@@ -504,12 +506,15 @@ class MATSC_Env(gym.Env, ABC):
             phase_vec = np.concatenate((phase_vec, np.zeros((pad_dim_2, phase_vec.shape[1]))), 0)
             phase_vec_dict[tls] = phase_vec
 
-        return phase_vec_dict, phase_mask_dict
+        self._phase_features = (phase_vec_dict, phase_mask_dict)
+        return self._phase_features
 
     def get_int_attr_vec_dict(self, padding=True):
         """
         Get the intersection attribute vectors for each intersection
         """
+        if padding in self._attribute_features:
+            return self._attribute_features[padding]
         int_attr_vec_dict = OrderedDict()
         for tls in self.rl_tls_list:
             if padding:
@@ -517,6 +522,7 @@ class MATSC_Env(gym.Env, ABC):
             else:
                 int_attr_vec_dict[tls] = self.tls_dict[tls].int_attr_vec
 
+        self._attribute_features[padding] = int_attr_vec_dict
         return int_attr_vec_dict
 
     def get_neighbor_actions(self, action_dict):
@@ -610,16 +616,16 @@ class MATSC_Env(gym.Env, ABC):
         """
         done = False
         if self.test:
-            if (traci.simulation.getTime() - self.start_simulation_step) >= self.max_test_step:
+            if (self.simulator.simulation.getTime() - self.start_simulation_step) >= self.max_test_step:
                 done = True
         else:
-            if (traci.simulation.getTime() - self.start_simulation_step) >= self.max_sumo_step:
+            if (self.simulator.simulation.getTime() - self.start_simulation_step) >= self.max_sumo_step:
                 done = True
-            # elif traci.simulation.getMinExpectedNumber() <= 0:
+            # elif self.simulator.simulation.getMinExpectedNumber() <= 0:
             #     done = True
 
         if done:
-            traci.close()
+            self.simulator.close()
 
         return done
 
@@ -633,13 +639,13 @@ class MATSC_Env(gym.Env, ABC):
         4. std_queue: stand deviation of queue for the whole network
         @warning: activating this function will slow down the simulation
         """
-        veh_list = traci.vehicle.getIDList()
+        veh_list = self.simulator.vehicle.getIDList()
         num_tot_car = len(veh_list)
-        num_in_car = traci.simulation.getDepartedNumber()
-        num_out_car = traci.simulation.getArrivedNumber()
+        num_in_car = self.simulator.simulation.getDepartedNumber()
+        num_out_car = self.simulator.simulation.getArrivedNumber()
         if num_tot_car > 0:
-            avg_waiting_time = np.mean([traci.vehicle.getWaitingTime(car) for car in veh_list])
-            avg_speed = np.mean([traci.vehicle.getSpeed(car) for car in veh_list])
+            avg_waiting_time = np.mean([self.simulator.vehicle.getWaitingTime(car) for car in veh_list])
+            avg_speed = np.mean([self.simulator.vehicle.getSpeed(car) for car in veh_list])
         else:
             avg_speed = 0
             avg_waiting_time = 0
@@ -648,12 +654,12 @@ class MATSC_Env(gym.Env, ABC):
         queues = []
         for tls in self.tls_dict.keys():
             for in_lane in self.tls_dict[tls].incoming_lane_list:
-                queues.append(traci.lane.getLastStepHaltingNumber(in_lane))
+                queues.append(self.simulator.lane.getLastStepHaltingNumber(in_lane))
         avg_queue = np.mean(np.array(queues))
         std_queue = np.std(np.array(queues))
 
         curr_traffic = {'episode': self.curr_episode,
-                        'time_sec': traci.simulation.getTime(),
+                        'time_sec': self.simulator.simulation.getTime(),
                         'number_total_car': num_tot_car,
                         'number_departed_car': num_in_car,
                         'number_arrived_car': num_out_car,
@@ -760,8 +766,8 @@ class MATSC_Env(gym.Env, ABC):
         """
         def get_vehicles(lane, max_distance):
             detectable = []
-            for vehicle in traci.lane.getLastStepVehicleIDs(lane):
-                path = traci.vehicle.getNextTLS(vehicle)
+            for vehicle in self.simulator.lane.getLastStepVehicleIDs(lane):
+                path = self.simulator.vehicle.getNextTLS(vehicle)
                 if len(path) > 0:
                     next_light = path[0]
                     distance = next_light[2]
@@ -778,7 +784,7 @@ class MATSC_Env(gym.Env, ABC):
                 queue = 0
                 lane_vehicles = get_vehicles(in_lane, max_distance)
                 for vehicle in lane_vehicles:
-                    if traci.vehicle.getWaitingTime(vehicle) > 0:
+                    if self.simulator.vehicle.getWaitingTime(vehicle) > 0:
                         queue += 1
                 if queue > max_queue:
                     max_queue = queue
@@ -786,7 +792,7 @@ class MATSC_Env(gym.Env, ABC):
             queue_lengths[tls] = queue_length
             max_queues[tls] = max_queue
         self.metrics_resco.append({
-            'step': traci.simulation.getTime(),
+            'step': self.simulator.simulation.getTime(),
             'reward': rewards,
             'max_queues': max_queues,
             'queue_lengths': queue_lengths
@@ -811,11 +817,11 @@ if __name__ == '__main__':
     # max_length = 0
     # for tls in env.tls_list:
     #     for in_lane in env.tls_dict[tls].incoming_lane_list:
-    #         length = traci.lane.getLength(in_lane)
+    #         length = env.simulator.lane.getLength(in_lane)
     #         if length > max_length:
     #             max_length = length
     #     for out_lane in env.tls_dict[tls].outgoing_lane_list:
-    #         length = traci.lane.getLength(out_lane)
+    #         length = env.simulator.lane.getLength(out_lane)
     #         if length > max_length:
     #             max_length = length
     # print(max_length)
@@ -826,5 +832,5 @@ if __name__ == '__main__':
             # action_dict[id] = env.tls_dict[id].get_fixed_time_action()
             # action_dict[id] = env.tls_dict[id].get_greedy_action()
             action_dict[id] = env.tls_dict[id].get_pressure_action()
-        print('Time:{}'.format(traci.simulation.getTime()))
+        print('Time:{}'.format(env.simulator.simulation.getTime()))
         next_obs, rewards, done, info = env.step(action_dict=action_dict)
