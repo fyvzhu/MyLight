@@ -223,9 +223,14 @@ class MATSC_Env(gym.Env, ABC):
         print('Worker {} || Reset Environment'.format(self.server_number))
         # Set random seed for simulation
         if self.random_seed:
-            self.seed = np.random.randint(0, 100000)
+            reserved = set(VALIDATION_PARAMS.SEEDS) | set(EVALUATION_PARAMS.SEEDS)
+            self.seed = int(np.random.randint(0, 100000))
+            while self.seed in reserved:
+                self.seed = int(np.random.randint(0, 100000))
         else:
             self.seed += 1
+            while self.seed in set(VALIDATION_PARAMS.SEEDS) | set(EVALUATION_PARAMS.SEEDS):
+                self.seed += 1
 
         # Start SUMO simulation
         self.set_world(self.seed)
@@ -265,9 +270,14 @@ class MATSC_Env(gym.Env, ABC):
         print('Worker {} || Reset Environment'.format(self.server_number))
         # Set random seed for simulation
         if self.random_seed:
-            self.seed = np.random.randint(0, 100000)
+            reserved = set(VALIDATION_PARAMS.SEEDS) | set(EVALUATION_PARAMS.SEEDS)
+            self.seed = int(np.random.randint(0, 100000))
+            while self.seed in reserved:
+                self.seed = int(np.random.randint(0, 100000))
         else:
             self.seed += 1
+            while self.seed in set(VALIDATION_PARAMS.SEEDS) | set(EVALUATION_PARAMS.SEEDS):
+                self.seed += 1
 
         # Start SUMO simulation
         self.set_world(self.seed)

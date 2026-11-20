@@ -1,11 +1,18 @@
 from pathlib import Path as _Path
+import os as _os
+import json as _json
 import yaml as _yaml
 
-with _Path(__file__).with_name('config.yaml').open() as _config_file:
-    _config = _yaml.safe_load(_config_file)
-if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'evaluation'}
+# Internal child-process snapshot. Both sources go through the same strict parser.
+# Parent processes read config.yaml once; Ray workers/validation inherit that snapshot.
+if 'UNICORN_SETTINGS_JSON' in _os.environ:
+    _config = _json.loads(_os.environ['UNICORN_SETTINGS_JSON'])
+else:
+    with _Path(__file__).with_name('config.yaml').open() as _config_file:
+        _config = _yaml.safe_load(_config_file)
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
         or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
-    raise ValueError('config.yaml must contain max_episodes, sumo.backend and evaluation')
+    raise ValueError('config.yaml must contain max_episodes, training, validation, checkpoints, sumo, evaluation and early_stopping')
 _max_episodes = _config['max_episodes']
 if type(_max_episodes) is not int or _max_episodes < 1:
     raise ValueError('max_episodes must be a positive integer')
@@ -35,13 +42,82 @@ if type(_evaluation['max_steps']) is not int or _evaluation['max_steps'] <= 0:
     raise ValueError('evaluation.max_steps must be a positive integer')
 
 
+_training = _config['training']
+_validation = _config['validation']
+_checkpoints = _config['checkpoints']
+if not isinstance(_training, dict) or set(_training) != {'network', 'seed'}:
+    raise ValueError('training must contain network and seed')
+if (not isinstance(_training['network'], str) or _Path(_training['network']).name != _training['network']
+        or not (_Path(__file__).parent / 'maps' / _training['network'] / f"{_training['network']}_config.json").is_file()):
+    raise ValueError('training.network must name an existing maps directory')
+if type(_training['seed']) is not int or not 0 <= _training['seed'] < 2**32 - 10000:
+    raise ValueError('training.seed must be a nonnegative integer below 2**32 - 10000')
+if not isinstance(_validation, dict) or set(_validation) != {'interval', 'seeds', 'policy_seed', 'max_steps', 'metric', 'completion_reference', 'min_completion_ratio'}:
+    raise ValueError('validation must contain interval, seeds, policy_seed, max_steps, metric, completion_reference and min_completion_ratio')
+for _key in ('interval', 'max_steps'):
+    if type(_validation[_key]) is not int or _validation[_key] < 1:
+        raise ValueError(f'validation.{_key} must be a positive integer')
+if (not isinstance(_validation['seeds'], list) or not _validation['seeds']
+        or any(type(s) is not int or not 0 <= s < 100000 for s in _validation['seeds'])
+        or len(set(_validation['seeds'])) != len(_validation['seeds'])):
+    raise ValueError('validation.seeds must be distinct integers in [0, 100000)')
+if type(_validation['policy_seed']) is not int or not 0 <= _validation['policy_seed'] < 2**32:
+    raise ValueError('validation.policy_seed must be an integer in [0, 2**32)')
+if _validation['metric'] != 'Queue Length':
+    raise ValueError('validation.metric must be Queue Length (lower is better)')
+if _validation['completion_reference'] != 'MaxPressure':
+    raise ValueError('validation.completion_reference must be MaxPressure')
+if (type(_validation['min_completion_ratio']) not in (int, float)
+        or not 0 < _validation['min_completion_ratio'] <= 1):
+    raise ValueError('validation.min_completion_ratio must be in (0, 1]')
+if set(_validation['seeds']) & set(_evaluation['seeds']):
+    raise ValueError('Validation and final evaluation SUMO seeds must be disjoint')
+if len(set(_validation['seeds']) | set(_evaluation['seeds'])) >= 100000:
+    raise ValueError('No SUMO seeds left for training')
+if not isinstance(_checkpoints, dict) or set(_checkpoints) != {'interval', 'keep'} or type(_checkpoints['keep']) is not int or _checkpoints['keep'] < 1:
+    raise ValueError('checkpoints must contain interval and a positive integer keep')
+if type(_checkpoints['interval']) is not int or _checkpoints['interval'] < 1:
+    raise ValueError('checkpoints.interval must be a positive integer')
+
+
+_early_stopping = _config['early_stopping']
+if not isinstance(_early_stopping, dict) or set(_early_stopping) != {
+        'enabled', 'min_updates', 'patience', 'min_relative_improvement'}:
+    raise ValueError('early_stopping must contain enabled, min_updates, patience and min_relative_improvement')
+if type(_early_stopping['enabled']) is not bool:
+    raise ValueError('early_stopping.enabled must be true or false')
+if type(_early_stopping['min_updates']) is not int or _early_stopping['min_updates'] < 0:
+    raise ValueError('early_stopping.min_updates must be a nonnegative integer')
+if type(_early_stopping['patience']) is not int or _early_stopping['patience'] < 1:
+    raise ValueError('early_stopping.patience must be a positive integer')
+if (type(_early_stopping['min_relative_improvement']) not in (int, float)
+        or not 0 <= _early_stopping['min_relative_improvement'] < 1):
+    raise ValueError('early_stopping.min_relative_improvement must be in [0, 1)')
+
+
+class EARLY_STOPPING_PARAMS:
+    ENABLED = _early_stopping['enabled']
+    MIN_UPDATES = _early_stopping['min_updates']
+    PATIENCE = _early_stopping['patience']
+    MIN_RELATIVE_IMPROVEMENT = _early_stopping['min_relative_improvement']
+
+
+class VALIDATION_PARAMS:
+    INTERVAL = _validation['interval']
+    SEEDS = _validation['seeds']
+    POLICY_SEED = _validation['policy_seed']
+    MAX_STEPS = _validation['max_steps']
+    METRIC = _validation['metric']
+    COMPLETION_REFERENCE = _validation['completion_reference']
+    MIN_COMPLETION_RATIO = _validation['min_completion_ratio']
+
+
+
 class INPUT_PARAMS:
     MAX_EPISODES        = _max_episodes
     NUM_META_AGENTS     = 6
     OBS_TYPE            = 'V1'  # ['V1', 'V2']
     UPDATE_TYPE         = 'PPO_MAC'
-    LOAD_MODEL          = False
-    EXPERIMENT_PATH     = None
     CO_TRAIN            = False
 
 
@@ -61,7 +137,7 @@ class SUMO_PARAMS:
     # GESA DATASETS: 'shaoxing_network_7', 'shenzhen_network_29', 'shenzhen_network_55'
     ALL_DATASETS        = ['cologne_network_8', 'ingolstadt_network_21', 'arterial_network_4_4',
                            'grid_network_4_4', 'shaoxing_network_7', 'shenzhen_network_29']
-    NET_NAME            = 'grid_network_5_5' # ['grid_network_5_5', 'monaco_network_30']
+    NET_NAME            = _training['network']
     CO_TRAIN            = INPUT_PARAMS.CO_TRAIN
     GUI                 = False
     RANDOM_SEED         = True
@@ -93,14 +169,14 @@ class SUMO_PARAMS:
 class TRAIN_PARAMS:
     MAX_EPISODE         = INPUT_PARAMS.MAX_EPISODES
     NUM_META_AGENTS     = INPUT_PARAMS.NUM_META_AGENTS
-    LOAD_MODEL          = INPUT_PARAMS.LOAD_MODEL
-    EXPERIMENT_PATH     = INPUT_PARAMS.EXPERIMENT_PATH
+    SEED                = _training['seed']
+    KEEP_CHECKPOINTS    = _checkpoints['keep']
+    CHECKPOINT_INTERVAL = _checkpoints['interval']
     CONTRASTIVE_LOSS    = False
     NEIGHBOR_REWARD     = False
     WANDB               = False
     USE_GPU             = True
     NUM_GPU             = 1
-    SAVE_MODEL_STEP     = 500
     SUMMARY_WINDOW      = 30
     RESET_OPTIM         = False
     RESET_OPTIM_STEP    = 20000

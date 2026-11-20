@@ -1,4 +1,38 @@
+# Number of complete sampling + PPO update rounds (each round uses all workers).
 max_episodes: 2000
+
+training:
+  network: grid_network_5_5
+  seed: 0
+
+validation:
+  # Validate on the training network after this many completed PPO updates.
+  # Also validates at the final update; each validation commits a resumable checkpoint.
+  interval: 200
+  seeds: [21001, 21002, 21003, 21004, 21005]
+  policy_seed: 2026
+  max_steps: 3600
+  # Minimize source-network Queue Length; invalid/empty-trip runs cannot win.
+  metric: Queue Length
+  completion_reference: MaxPressure
+  # Per validation seed: candidate completed veh/s >= reference completed veh/s * ratio.
+  # 1.0 means at least the reference flow; fix this rule before the experiment.
+  min_completion_ratio: 1.0
+
+early_stopping:
+  enabled: true
+  # Validate/select best throughout training; only count patience AFTER this update.
+  min_updates: 1000
+  # Number of consecutive validations without significant eligible improvement.
+  patience: 3
+  # Cumulative decrease from the last significant Queue Length improvement (1%).
+  # Smaller eligible decreases still update best_model, but do not reset patience.
+  min_relative_improvement: 0.01
+
+checkpoints:
+  # Independent of validation.interval: limit work lost after interruption.
+  interval: 300
+  keep: 2
 
 sumo:
   # Simulation backend: libsumo or traci. Both use SUMO 1.16.0.
@@ -7,9 +41,9 @@ sumo:
 evaluation:
   # Unicorn, HeteroLight, FixedTime, Greedy, MaxPressure
   algorithm: Unicorn
-  # Required for Unicorn/HeteroLight: model/checkpoint*.pkl (model_state_dict).
+  # Use train_outputs/<algorithm>/<run>/models/best_model.pkl for both tests.
   # Relative paths start at this project root. Use null for rule-based methods.
-  checkpoint:  "train_outputs/Unicorn/Unicorn_20261120_002703_390327/model/checkpoint1000.pkl"
+  checkpoint: null
   network: grid_network_5_5
   seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
   policy_seed: 21
@@ -18,3 +52,21 @@ evaluation:
   # Evaluation writes data/metrics.json: ATT/AWT of completed trips (s),
   # and LibSignal SUMO AQL (veh/intersection, 200 m detection distance).
   # The same JSON also summarizes the six Unicorn-paper metrics from the CSVs.
+
+# New run: python driver_unicorn.py (or driver_heterolight.py).
+# Resume the SAME run: python driver_unicorn.py --resume-run train_outputs/Unicorn/<run>
+# Keep training/validation settings unchanged when resuming; target evaluation.network
+# and evaluation.checkpoint can change for same-network / unseen-network testing.
+#
+# train_outputs/<algorithm>/<run>/
+#   models/best_model.pkl               selected weights; absent if none qualifies
+#   models/checkpoints/checkpoint_*.pkl last checkpoints.keep complete training states
+#   models/sampling_weights.pth         internal worker exchange; overwritten
+#   validation/reference/               fixed MaxPressure validation results
+#   validation/update_XXXXXXXX/         candidate validation CSVs + metrics
+#   validation/selection.json           all validation scores and selection decisions
+#   tensorboard/                        training and validation curves
+#   simulation/                         per-worker training simulation outputs
+# Early-stop counters and stop reason are committed with the training checkpoint.
+# A normally early-stopped run is complete; --resume-run does not restart it.
+# Historical runs are kept as they are; new training uses only this layout/format.

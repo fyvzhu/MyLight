@@ -4,6 +4,7 @@ from collections import OrderedDict
 from run_paths import RunPaths
 from evaluation import evaluation_settings, seed_policy
 from evaluation_metrics import EvaluationReport
+from model_io import load_weights
 from parameters import EVALUATION_PARAMS
 from torch.distributions.categorical import Categorical
 from utils import convert_to_tensor, save_as_csv
@@ -29,12 +30,16 @@ class Evaluator:
         self.rnn_states_critic = None
 
 
-    def load_model(self, model_path):
+    def load_model(self, model_path, validation=False):
         """
         Load saved trained model
         """
-        checkpoint = torch.load(model_path, map_location=self.device)
-        self.local_network.load_state_dict(checkpoint['model_state_dict'])
+        checkpoint = load_weights(model_path, self.local_network, self.env, self.model_name, self.device)
+        if not validation:
+            if set(checkpoint['validation_seeds']) & set(EVALUATION_PARAMS.SEEDS):
+                raise ValueError('Final evaluation seeds overlap the model selection seeds')
+        self.local_network.eval()
+        return checkpoint
 
     def reset(self):
         # Reset evaluator params
@@ -149,8 +154,10 @@ def main():
                   int_vec_dim=env.tls_int_attr_space,
                   actor_lr=1e-4, critic_lr=1e-4)
     evaluator = Evaluator(env=env, model=model, run=run)
-    evaluator.load_model(checkpoint)
-    run.save_config(checkpoint=checkpoint)
+    saved = evaluator.load_model(checkpoint)
+    run.save_config(checkpoint=checkpoint, model_source={
+        'training_network': saved['source_network'], 'completed_updates': saved['completed_updates'],
+        'schema': saved['schema'], 'selection': saved.get('selection')})
     print('Random seeds:', EVALUATION_PARAMS.SEEDS)
     try:
         for i, seed in enumerate(EVALUATION_PARAMS.SEEDS):

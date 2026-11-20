@@ -4,6 +4,8 @@ import torch
 import numpy as np
 
 from parameters import *
+from model_io import SamplingState, load_weights
+from evaluation import seed_policy
 from collections import OrderedDict
 from models.HeteroLight import HeteroLight
 from torch.distributions.categorical import Categorical
@@ -11,11 +13,12 @@ from utils import set_env, convert_to_tensor, calculate_discount_return
 
 
 @ray.remote(num_cpus=1, num_gpus=0)
-class Runner(object):
+class Runner(SamplingState):
     """ Actor object to start running simulation on workers.
         Gradient computation is also executed on this object."""
 
     def __init__(self, meta_agent_id, run):
+        seed_policy(TRAIN_PARAMS.SEED + meta_agent_id + 1)
         self.id = meta_agent_id
         self.run = run
         self.device = torch.device('cpu')
@@ -40,9 +43,6 @@ class Runner(object):
         self.episode_reward = None
         self.episode_action_change = None
         self.episode_eval_metrics = None
-
-    def set_weights(self, weights):
-        self.local_network.load_state_dict(weights)
 
     def initialization(self):
         # Initialize variables
@@ -192,8 +192,8 @@ class Runner(object):
         job_results, metrics = None, None
         self.curr_episode = episode_number
         # Set the local weights to the global weights from the master network
-        weights = torch.load(self.run.model / 'state_dict.pth', map_location=self.device)
-        self.set_weights(weights=weights)
+        load_weights(self.run.model / 'sampling_weights.pth', self.local_network,
+                     self.env, self.run.algorithm, self.device)
 
         if COMPUTE_TYPE == COMPUTE_OPTIONS.SINGLE_THREADED:
             if JOB_TYPE == JOB_OPTIONS.GET_EXPERIENCE:

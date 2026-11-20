@@ -49,7 +49,7 @@ class RunPaths:
 
     @property
     def model(self):
-        return self.root / 'model'
+        return self.root / 'models'
 
     @property
     def tensorboard(self):
@@ -63,7 +63,7 @@ class RunPaths:
     def simulation(self):
         return self.root / 'simulation'
 
-    def save_config(self, checkpoint=None):
+    def save_config(self, checkpoint=None, model_source=None):
         sumo = _public(settings.SUMO_PARAMS)
         if self.stage == 'evaluate':
             sumo['NET_NAME'] = settings.EVALUATION_PARAMS.NETWORK
@@ -71,9 +71,12 @@ class RunPaths:
         sumo['CONFIG_PATH'] = str(Path(sumo['NET_PATH']) / f"{sumo['NET_NAME']}_config.json")
         config = {'stage': self.stage, 'algorithm': self.algorithm, 'run_dir': str(self.root), 'sumo': sumo}
         if self.stage == 'train':
-            config.update(max_episodes=settings.INPUT_PARAMS.MAX_EPISODES,
+            config.update(settings=settings._config, max_episodes=settings.INPUT_PARAMS.MAX_EPISODES,
                           input=_public(settings.INPUT_PARAMS), training=_public(settings.TRAIN_PARAMS),
-                          network=_public(settings.NETWORK_PARAMS))
+                          network=_public(settings.NETWORK_PARAMS),
+                          validation=_public(settings.VALIDATION_PARAMS),
+                          early_stopping=_public(settings.EARLY_STOPPING_PARAMS),
+                          test_seeds=settings.EVALUATION_PARAMS.SEEDS)
         else:
             config['evaluation'] = _public(settings.EVALUATION_PARAMS)
         if checkpoint is not None:
@@ -83,6 +86,8 @@ class RunPaths:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                     hasher.update(chunk)
             config['checkpoint'] = {'path': str(checkpoint.resolve()), 'sha256': hasher.hexdigest()}
+        if model_source is not None:
+            config['model_source'] = model_source
         with (self.root / 'config.yaml').open('w') as stream:
             yaml.safe_dump(config, stream, allow_unicode=True, sort_keys=False)
 

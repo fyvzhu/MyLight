@@ -3,18 +3,13 @@ Distributed learning framework based on Multi-agent Proximal Policy Optimization
 Created by Yifeng Zhang
 """
 import numpy as np
-import ray
 import random
 
 from utils import *
-from run_paths import RunPaths, project_path
 from runner_heterolight import Runner
 from models.HeteroLight import HeteroLight
-from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.categorical import Categorical
 
-ray.init(num_gpus=TRAIN_PARAMS.NUM_GPU)
-print("Hello World !\n")
 
 
 def write_to_Tensorboard(global_summary, tensorboard_data, curr_episode, plot_means=True):
@@ -176,124 +171,12 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
     return p_l / k_epoch, v_l / k_epoch, e_l / k_epoch, a_gn / k_epoch, c_gn / k_epoch, c_f / k_epoch, a_v_l / k_epoch, c_v_l / k_epoch
 
 
+
 def main():
-    run = RunPaths.create('train', 'HeteroLight')
-    print('Training output:', run.root)
-    global_env = set_env(server_number=None, run=run)
-    global_device = torch.device('cuda') if TRAIN_PARAMS.USE_GPU else torch.device('cpu')
-    global_network = HeteroLight(input_dim=global_env.tls_obs_space,
-                                 agent_dim=global_env.tls_all_agent_space,
-                                 int_vec_dim=global_env.tls_int_attr_space,
-                                 actor_lr=NETWORK_PARAMS.A_LR_Q,
-                                 critic_lr=NETWORK_PARAMS.C_LR_Q).to(global_device)
-
-    if TRAIN_PARAMS.LOAD_MODEL:
-        assert TRAIN_PARAMS.EXPERIMENT_PATH is not None
-        print('====== Loading model ======')
-        source_checkpoint = project_path(TRAIN_PARAMS.EXPERIMENT_PATH) / 'model/checkpoint.pkl'
-        checkpoint = torch.load(source_checkpoint)
-        global_network.load_state_dict(checkpoint['model_state_dict'])
-        global_network.actor_optimizer.load_state_dict(checkpoint['optimizer_state_dict'][0])
-        global_network.critic_optimizer.load_state_dict(checkpoint['optimizer_state_dict'][1])
-        curr_episode = checkpoint['epoch']
-        torch.save(global_network.state_dict(),
-                   run.model / 'state_dict_{}.pth'.format(curr_episode))
-        print("====== Current episode set to {} ======\n".format(curr_episode))
-
-    else:
-        # Create New experiment directories
-        print("====== Launching New Training ======")
-        source_checkpoint = None
-        print('====== Logging Configuration ======\n')
-
-        curr_episode = 0
-
-    global_summary = SummaryWriter(str(run.tensorboard))
-    run.save_config(checkpoint=source_checkpoint)
-
-    # launch all the threads:
-    meta_agents = [Runner.remote(i, run) for i in range(TRAIN_PARAMS.NUM_META_AGENTS)]
-
-    # get the initial weights from the global network
-    weights = global_network.state_dict()
-    torch.save(weights, run.model / 'state_dict.pth')
-
-    # launch the first job (e.g. getGradient) on each runner
-    job_list = []  # Ray ObjectIDs
-    for i, meta_agent in enumerate(meta_agents):
-        job_list.append(meta_agent.job.remote(curr_episode))
-    curr_episode += 1
-
-    tensorboard_data = []
-    try:
-        while curr_episode < INPUT_PARAMS.MAX_EPISODES:
-            # wait for any job to be completed - unblock as soon as the earliest arrives
-            done_id, job_list = ray.wait(job_list, num_returns=TRAIN_PARAMS.NUM_META_AGENTS)
-
-            # get the results of the task from the object store
-            # job_results, metrics, info = ray.get(done_id)[0]
-            all_jobs = ray.get(done_id)
-            global_buffer, global_metrics = get_global_train_buffer(all_jobs)
-
-            if JOB_TYPE == JOB_OPTIONS.GET_EXPERIENCE:
-                if NETWORK_PARAMS.UPDATE_TYPE == 'PPO_MAC':
-                    train_metrics = calculate_gradients_ma_ppo(network=global_network,
-                                                               device=global_device,
-                                                               experience_buffers=global_buffer)
-
-                else:
-                    raise NotImplemented
-
-                tensorboard_data.append(list(train_metrics) + list(global_metrics))
-
-            else:
-                print("Not implemented")
-                assert (1 == 0)
-            print("====== Finish updating the network ======")
-
-            if len(tensorboard_data) >= TRAIN_PARAMS.SUMMARY_WINDOW:
-                write_to_Tensorboard(global_summary, tensorboard_data, curr_episode)
-                tensorboard_data = []
-
-            # get the updated weights from the global network
-            weights = global_network.state_dict()
-            torch.save(weights, run.model / 'state_dict.pth')
-            curr_episode += 1
-
-            # start a new job on the recently completed agent with the updated weights
-            # job_list.extend([meta_agents[info["id"]].job.remote(curr_episode)])
-            job_list = []
-            if curr_episode < INPUT_PARAMS.MAX_EPISODES:
-                for i, meta_agent in enumerate(meta_agents):
-                    job_list.append(meta_agent.job.remote(curr_episode))
-
-            # save model
-            if curr_episode % TRAIN_PARAMS.SAVE_MODEL_STEP == 0:
-                print('Saving Model !', end='\n')
-                checkpoint = {"model_state_dict": global_network.state_dict(),
-                              "optimizer_state_dict": [global_network.actor_optimizer.state_dict(),
-                                                       global_network.critic_optimizer.state_dict()],
-                              "epoch": curr_episode}
-                path_checkpoint = run.model / 'checkpoint{}.pkl'.format(curr_episode)
-
-                torch.save(checkpoint, path_checkpoint)
-
-            # reset optimizer
-            if TRAIN_PARAMS.RESET_OPTIM and (curr_episode - 1) % TRAIN_PARAMS.RESET_OPTIM_STEP == 0:
-                global_network.reset_optimizer()
-
-    except KeyboardInterrupt:
-        print("CTRL-C pressed. killing remote workers")
-    finally:
-        for a in meta_agents:
-            ray.kill(a)
-        global_summary.close()
+    from training import entrypoint
+    entrypoint('HeteroLight', HeteroLight, Runner, get_global_train_buffer,
+               calculate_gradients_ma_ppo, write_to_Tensorboard)
 
 
-if __name__ == "__main__":
-    # Set random number generator
-    random.seed(0)
-    np.random.seed(0)
-    torch.manual_seed(0)
-
+if __name__ == '__main__':
     main()
