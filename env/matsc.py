@@ -8,6 +8,7 @@ from sumolib import checkBinary
 from parameters import *
 from env.tls import Tls
 from env.sumo import Simulator
+from evaluation_metrics import SumoEvaluationMetrics
 from utils import load_json
 from collections import OrderedDict
 from maps.net_simu_generator import gen_cfg_file
@@ -95,6 +96,8 @@ class MATSC_Env(gym.Env, ABC):
         self.metrics_resco = []
 
         self.initialization()
+        self.evaluation_metrics = (SumoEvaluationMetrics(self.incoming_lane_dict, self.outgoing_lane_dict)
+                                   if self.test else None)
 
     def initialization(self):
         """
@@ -286,6 +289,8 @@ class MATSC_Env(gym.Env, ABC):
         self.rl_step = 0
         self.sumo_step = 0
         self.start_simulation_step = self.simulator.simulation.getTime()
+        if self.test:
+            self.evaluation_metrics.reset()
 
     def step(self, action_dict):
         """
@@ -392,7 +397,9 @@ class MATSC_Env(gym.Env, ABC):
         self.sumo_step += 1
         self.simulator.simulationStep()
         if self.test:
-            self.measure_traffic_step()
+            aql = self.evaluation_metrics.observe_step(
+                self.simulator, sample_queue=self.sumo_step % self.sumo_steps_green_phase == 0)
+            self.measure_traffic_step(aql)
 
     def observe(self):
         """
@@ -632,7 +639,7 @@ class MATSC_Env(gym.Env, ABC):
 
         return done
 
-    def measure_traffic_step(self):
+    def measure_traffic_step(self, aql):
         """
         Measure traffic metrics per sumo step only for evaluation/test
         @return: dictionary, key/metric name, value/metric value
@@ -640,6 +647,7 @@ class MATSC_Env(gym.Env, ABC):
         2. avg_wait_sec: average waiting time for the whole network
         3. avg_queue: average queue for the whole network
         4. std_queue: stand deviation of queue for the whole network
+        5. AQL: LibSignal per-intersection queue at decision boundaries (otherwise empty)
         @warning: activating this function will slow down the simulation
         """
         veh_list = self.simulator.vehicle.getIDList()
@@ -669,7 +677,9 @@ class MATSC_Env(gym.Env, ABC):
                         'avg_wait_sec': avg_waiting_time,
                         'avg_speed_mps': avg_speed,
                         'std_queue': std_queue,
-                        'avg_queue': avg_queue}
+                        'avg_queue': avg_queue,
+                        # Only decision boundaries contribute to the new AQL.
+                        'AQL': aql}
 
         self.traffic_data.append(curr_traffic)
 

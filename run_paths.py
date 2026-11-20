@@ -36,7 +36,7 @@ class RunPaths:
         allowed = LEARNING_ALGORITHMS if stage == 'train' else LEARNING_ALGORITHMS + RULE_ALGORITHMS
         if algorithm not in allowed:
             raise ValueError(f'{algorithm} is not a {stage} algorithm')
-        parent = PROJECT_ROOT / ('train_outputs' if stage == 'train' else 'evaluate_outputss') / algorithm
+        parent = PROJECT_ROOT / ('train_outputs' if stage == 'train' else 'evaluate_outputs') / algorithm
         parent.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S_%f')
         root = parent / f'{algorithm}_{stamp}'
@@ -95,6 +95,8 @@ class RunPaths:
 def prepare_simulation(source, workspace):
     """Reference static inputs and isolate generated routes, detector and XML outputs."""
     source, workspace = Path(source), Path(workspace)
+    if workspace.resolve().is_relative_to(PROJECT_ROOT / 'maps'):
+        raise ValueError('Simulation output must be outside the original maps directory')
     workspace.mkdir(parents=True, exist_ok=True)
     dynamic = source.name in ('grid_network_5_5', 'monaco_network_30')
     output_tags = {'laneAreaDetector', 'inductionLoop', 'e1Detector', 'e2Detector',

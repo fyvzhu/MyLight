@@ -3,6 +3,7 @@ import numpy as np
 from collections import OrderedDict
 from run_paths import RunPaths
 from evaluation import evaluation_settings, seed_policy
+from evaluation_metrics import EvaluationReport
 from parameters import EVALUATION_PARAMS
 from torch.distributions.categorical import Categorical
 from utils import convert_to_tensor, save_as_csv
@@ -15,6 +16,7 @@ class Evaluator:
         self.run = run
         self.local_network = model
         self.model_name = run.algorithm
+        self.metrics = EvaluationReport(run, env.net_file_name, env.sumo_steps_green_phase)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.local_network.to(self.device)
@@ -112,6 +114,7 @@ class Evaluator:
 
         # collect trip information each run
         self.env.collect_trip_data()
+        self.metrics.add_episode(self.env.traffic_data, self.env.trip_data, index, seed)
 
         print('{} || Episode Length: {} || Episode Reward: {} || Action Change: {}'.format(index,
                                                                                            self.episode_step,
@@ -127,6 +130,7 @@ class Evaluator:
         trip_data_path = self.run.data / f'{self.env.net_file_name}_trip.csv'
         save_as_csv(file=traffic_data_path, data=self.env.traffic_data)
         save_as_csv(file=trip_data_path, data=self.env.trip_data)
+        self.metrics.save()
 
 
 def main():

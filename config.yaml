@@ -15,3 +15,6 @@ evaluation:
   policy_seed: 21
   # Simulated seconds, excluding a scenario's initial clock offset.
   max_steps: 3600
+  # Evaluation writes data/metrics.json: ATT/AWT of completed trips (s),
+  # and LibSignal SUMO AQL (veh/intersection, 200 m detection distance).
+  # The same JSON also summarizes the six Unicorn-paper metrics from the CSVs.

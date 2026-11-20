@@ -98,5 +98,9 @@ def calculate_discount_return(x, gamma):
 
 
 def set_env(server_number, run, test=False, network=None):
+    # Keep imported map generator modules from creating maps/**/__pycache__.
+    # This also runs inside each Ray worker, before it imports the environment.
+    import sys
+    sys.dont_write_bytecode = True
     from env.matsc import MATSC_Env
     return MATSC_Env(server_number, run, test=test, network=network)
