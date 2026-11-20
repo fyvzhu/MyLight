@@ -15,13 +15,14 @@ class Runner(object):
     """ Actor object to start running simulation on workers.
         Gradient computation is also executed on this object."""
 
-    def __init__(self, meta_agent_id):
+    def __init__(self, meta_agent_id, run):
         self.id = meta_agent_id
+        self.run = run
         self.device = torch.device('cpu')
         self.curr_episode = int(meta_agent_id)
 
         self.neighbor_reward = TRAIN_PARAMS.NEIGHBOR_REWARD
-        self.env = set_env(server_number=meta_agent_id)
+        self.env = set_env(server_number=meta_agent_id, run=run)
 
         self.input_size = self.env.tls_obs_space
         self.output_size = self.env.tls_action_space
@@ -207,10 +208,7 @@ class Runner(object):
         job_results, metrics = None, None
         self.curr_episode = episode_number
         # Set the local weights to the global weights from the master network
-        if TRAIN_PARAMS.LOAD_MODEL:
-            weights = torch.load(TRAIN_PARAMS.EXPERIMENT_PATH + 'model/state_dict.pth', map_location=self.device)
-        else:
-            weights = torch.load(EXPERIMENT_PARAMS.MODEL_PATH + '/state_dict.pth', map_location=self.device)
+        weights = torch.load(self.run.model / 'state_dict.pth', map_location=self.device)
         self.set_weights(weights=weights)
 
         if COMPUTE_TYPE == COMPUTE_OPTIONS.SINGLE_THREADED:
@@ -229,8 +227,3 @@ class Runner(object):
         info = {"id": self.id}
 
         return job_results, metrics, info
-
-
-if __name__ == '__main__':
-    runner = Runner(0)
-    runner.run_episode_single_threaded()

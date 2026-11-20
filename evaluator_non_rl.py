@@ -1,20 +1,19 @@
 from utils import save_as_csv
+import torch
+import numpy as np
 from collections import OrderedDict
-from parameters import SUMO_PARAMS
+from run_paths import RunPaths
+from evaluation import evaluation_settings, seed_policy
+from parameters import EVALUATION_PARAMS
 
 
 class Evaluator:
-    def __init__(self, env, exp_dir, agent_name):
+    def __init__(self, env, run):
         super(Evaluator, self).__init__()
         self.env = env
-        self.exp_dir = exp_dir
-        self.agent_name = agent_name
+        self.run = run
+        self.agent_name = run.algorithm
 
-        self.data_file = 'eval_data'
-        self.data_path = self.exp_dir + '/' + self.data_file
-
-        if not os.path.exists(self.data_path):
-            os.makedirs(self.data_path)
 
         self.episode_step = None
         self.episode_reward = None
@@ -47,11 +46,11 @@ class Evaluator:
         obs_n = self.reset()
         done = False
         while not done:
-            if self.agent_name == 'FIXED':
+            if self.agent_name == 'FixedTime':
                 action_dict = OrderedDict()
                 for i, tls in enumerate(self.env.tls_list):
                     action_dict[tls] = self.env.tls_dict[tls].get_fixed_time_action()
-            elif self.agent_name == 'GREEDY':
+            elif self.agent_name == 'Greedy':
                 action_dict = OrderedDict()
                 if self.env.tls_map_dataset == 'resco':
                     for i, tls in enumerate(self.env.tls_list):
@@ -60,7 +59,7 @@ class Evaluator:
                     for i, tls in enumerate(self.env.tls_list):
                         action_dict[tls] = self.env.tls_dict[tls].get_greedy_action(detector=True)
 
-            elif self.agent_name == 'PRESSURE':
+            elif self.agent_name == 'MaxPressure':
                 action_dict = OrderedDict()
                 if self.env.tls_map_dataset == 'resco':
                     for i, tls in enumerate(self.env.tls_list):
@@ -92,46 +91,31 @@ class Evaluator:
         Save the evaluation results (traffic data and trip data)
         @return:
         """
-        map_name_part = SUMO_PARAMS.NET_NAME.split('_')
-        map_name = map_name_part[0] + '_' + map_name_part[1]
-        traffic_data_path = self.data_path + '/' + '{}_{}_traffic.csv'.format(map_name, self.agent_name)
-        trip_data_path = self.data_path + '/' + '{}_{}_trip.csv'.format(map_name, self.agent_name)
+        traffic_data_path = self.run.data / f'{self.env.net_file_name}_traffic.csv'
+        trip_data_path = self.run.data / f'{self.env.net_file_name}_trip.csv'
         save_as_csv(file=traffic_data_path, data=self.env.traffic_data)
         save_as_csv(file=trip_data_path, data=self.env.trip_data)
 
 
-if __name__ == '__main__':
-    import os
-    import torch
-    import random
-    import numpy as np
-
+def main():
     from utils import set_env
-
-    random_seed = 21
-    random.seed(random_seed)
-    np.random.seed(random_seed)
-    torch.manual_seed(random_seed)
-    torch.cuda.manual_seed(random_seed)
-    torch.cuda.manual_seed_all(random_seed)
-
-    seed = 100
-    test_num = 10
-    start_seed = 1000
-    exp_dir = './Test'
-
-    # Testing parameter for learning based method
-    agent_name_list = ['FIXED', 'GREEDY', 'PRESSURE']  # ['FIXED', 'GREEDY', 'PRESSURE']
-    # Learning Test
-    for agent_name in agent_name_list:
-        env = set_env(server_number=66, test=True)
-        evaluator = Evaluator(env=env,
-                              exp_dir=exp_dir,
-                              agent_name=agent_name)
-
-        seeds = [start_seed + seed * i for i in range(test_num)]
-        print("Random Seed:{}".format(seeds))
-        for i, seed in enumerate(seeds):
+    algorithm, _ = evaluation_settings(learning=False)
+    seed_policy(EVALUATION_PARAMS.POLICY_SEED)
+    run = RunPaths.create('evaluate', algorithm)
+    print('Evaluation output:', run.root)
+    env = set_env(server_number=0, run=run, test=True, network=EVALUATION_PARAMS.NETWORK)
+    run.save_config()
+    evaluator = Evaluator(env=env, run=run)
+    print('Random seeds:', EVALUATION_PARAMS.SEEDS)
+    try:
+        for i, seed in enumerate(EVALUATION_PARAMS.SEEDS):
             evaluator.evaluate(index=i, seed=seed)
         evaluator.output_eval_data()
-        print('Finish output the evaluation data for {}!'.format(agent_name))
+    finally:
+        if env.simulator.isLoaded():
+            env.simulator.close()
+    print('Finish output the evaluation data!')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,19 +1,21 @@
+import torch
+import numpy as np
 from collections import OrderedDict
-from parameters import SUMO_PARAMS
+from run_paths import RunPaths
+from evaluation import evaluation_settings, seed_policy
+from parameters import EVALUATION_PARAMS
 from torch.distributions.categorical import Categorical
 from utils import convert_to_tensor, save_as_csv
 
 
 class Evaluator:
-    def __init__(self, env, model, exp_dir, model_name):
+    def __init__(self, env, model, run):
         super(Evaluator, self).__init__()
         self.env = env
-        self.exp_dir = exp_dir
+        self.run = run
         self.local_network = model
-        self.model_name = model_name
+        self.model_name = run.algorithm
 
-        self.data_file = 'eval_data'
-        self.data_path = self.exp_dir + '/' + self.data_file
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.local_network.to(self.device)
 
@@ -24,8 +26,6 @@ class Evaluator:
         self.rnn_states_actor = None
         self.rnn_states_critic = None
 
-        if not os.path.exists(self.data_path):
-            os.makedirs(self.data_path)
 
     def load_model(self, model_path):
         """
@@ -67,7 +67,7 @@ class Evaluator:
         obs_n = self.reset()
         done = False
         while not done:
-            if self.model_name == 'UNICORN' or self.model_name == 'HETEROLIGHT':
+            if self.model_name == 'Unicorn' or self.model_name == 'HeteroLight':
                 action_dict = OrderedDict()
                 phase_vec_dict, phase_mask_dict = self.env.get_phase_vec_mask_dict()
                 int_attr_vec_dict = self.env.get_int_attr_vec_dict()
@@ -123,68 +123,40 @@ class Evaluator:
         Save the evaluation results (traffic data and trip data)
         @return:
         """
-        map_name_part = SUMO_PARAMS.NET_NAME.split('_')
-        map_name = map_name_part[0] + '_' + map_name_part[1]
-        traffic_data_path = self.data_path + '/' + '{}_{}_traffic.csv'.format(map_name, self.model_name)
-        trip_data_path = self.data_path + '/' + '{}_{}_trip.csv'.format(map_name, self.model_name)
+        traffic_data_path = self.run.data / f'{self.env.net_file_name}_traffic.csv'
+        trip_data_path = self.run.data / f'{self.env.net_file_name}_trip.csv'
         save_as_csv(file=traffic_data_path, data=self.env.traffic_data)
         save_as_csv(file=trip_data_path, data=self.env.trip_data)
 
 
-if __name__ == '__main__':
-    import os
-    import torch
-    import random
-    import numpy as np
-
+def main():
     from utils import set_env
-
-    random_seed = 21
-    random.seed(random_seed)
-    np.random.seed(random_seed)
-    torch.manual_seed(random_seed)
-    torch.cuda.manual_seed(random_seed)
-    torch.cuda.manual_seed_all(random_seed)
-
-    seed = 100
-    test_num = 10
-    exp_dir = './Test'
-
-    # Testing parameter for learning based method
-    agent_name_list = ['UNICORN']  # ['UNICORN', 'HETEROLIGHT']
-    model_path_list = [None] # To be set by the user
-    # Learning Test
-    for model_name, model_path in zip(agent_name_list, model_path_list):
-        env = set_env(server_number=66, test=True)
-        if model_name == 'UNICORN':
-            from models.Unicorn import Unicorn
-            model = Unicorn(input_dim=env.tls_obs_space,
-                            agent_dim=env.tls_agent_space,
-                            int_vec_dim=env.tls_int_attr_space,
-                            actor_lr=1e-4,
-                            critic_lr=1e-4)
-
-        elif model_name == 'HETEROLIGHT':
-            from models.HeteroLight import HeteroLight
-            model = HeteroLight(input_dim=env.tls_obs_space,
-                                agent_dim=env.tls_agent_space,
-                                int_vec_dim=env.tls_int_attr_space,
-                                actor_lr=1e-4,
-                                critic_lr=1e-4)
-
-        else:
-            raise NotImplementedError
-
-        evaluator = Evaluator(env=env,
-                              model=model,
-                              exp_dir=exp_dir,
-                              model_name=model_name)
-
-        evaluator.load_model(model_path)
-        seeds = [1000 + seed * i for i in range(test_num)]
-        print("Random Seed:{}".format(seeds))
-        for i, seed in enumerate(seeds):
+    algorithm, checkpoint = evaluation_settings(learning=True)
+    seed_policy(EVALUATION_PARAMS.POLICY_SEED)
+    run = RunPaths.create('evaluate', algorithm)
+    print('Evaluation output:', run.root)
+    env = set_env(server_number=0, run=run, test=True, network=EVALUATION_PARAMS.NETWORK)
+    if algorithm == 'Unicorn':
+        from models.Unicorn import Unicorn as Model
+    else:
+        from models.HeteroLight import HeteroLight as Model
+    model = Model(input_dim=env.tls_obs_space,
+                  agent_dim=env.tls_agent_space,
+                  int_vec_dim=env.tls_int_attr_space,
+                  actor_lr=1e-4, critic_lr=1e-4)
+    evaluator = Evaluator(env=env, model=model, run=run)
+    evaluator.load_model(checkpoint)
+    run.save_config(checkpoint=checkpoint)
+    print('Random seeds:', EVALUATION_PARAMS.SEEDS)
+    try:
+        for i, seed in enumerate(EVALUATION_PARAMS.SEEDS):
             evaluator.evaluate(index=i, seed=seed)
-
         evaluator.output_eval_data()
-        print('Finish output the evaluation data!')
+    finally:
+        if env.simulator.isLoaded():
+            env.simulator.close()
+    print('Finish output the evaluation data!')
+
+
+if __name__ == '__main__':
+    main()

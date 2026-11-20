@@ -11,14 +11,16 @@ from env.sumo import Simulator
 from utils import load_json
 from collections import OrderedDict
 from maps.net_simu_generator import gen_cfg_file
+from run_paths import PROJECT_ROOT, prepare_simulation, confine_config_outputs
 
 
 class MATSC_Env(gym.Env, ABC):
-    def __init__(self, server_number, test=False):
+    def __init__(self, server_number, run, test=False, network=None):
         super(MATSC_Env, self).__init__()
 
         self.test = test
         self.server_number = server_number
+        self.run = run
 
         self.config_data = None
         self.tls_list = None
@@ -37,7 +39,7 @@ class MATSC_Env(gym.Env, ABC):
         self.reward_detector = self.env_params.REWARD_DETECTOR
         self.regional_reward = self.env_params.REGIONAL_REWARD
         self.max_sumo_step = self.env_params.MAX_SUMO_STEP
-        self.max_test_step = self.env_params.MAX_TEST_STEP
+        self.max_test_step = EVALUATION_PARAMS.MAX_STEPS
         self.sumo_max_distance = self.env_params.MAX_DISTANCE
         self.sumo_steps_green_phase = self.env_params.GREEN_DURATION
         self.sumo_steps_yellow_phase = self.env_params.YELLOW_DURATION
@@ -46,16 +48,15 @@ class MATSC_Env(gym.Env, ABC):
         self.all_datasets = self.env_params.ALL_DATASETS
         if self.co_train and self.server_number is not None and not self.test:
             self.net_file_name = self.all_datasets[self.server_number]
-            self.net_file_path = './maps/{}'.format(self.net_file_name)
-            self.net_config_path = self.net_file_path + '/{}_config.json'.format(self.net_file_name)
         else:
-            self.net_file_name = self.env_params.NET_NAME
-            self.net_file_path = self.env_params.NET_PATH
-            self.net_config_path = self.env_params.CONFIG_PATH
-        self.sumo_file_path = self.net_file_path + "/{}_{}.sumocfg".format(self.net_file_name, self.server_number)
-        self.trip_file_path = self.net_file_path + "/trip_{}.xml".format(self.server_number)
-        self.routes_output_file_path = self.net_file_path + "/routes_output_{}.xml".format(self.server_number)
-        self.statistic_output_file_path = self.net_file_path + "/statistic_{}.xml".format(self.server_number)
+            self.net_file_name = network or self.env_params.NET_NAME
+        self.net_file_path = str(PROJECT_ROOT / 'maps' / self.net_file_name)
+        self.net_config_path = str(PROJECT_ROOT / 'maps' / self.net_file_name / f'{self.net_file_name}_config.json')
+        self.simulation_path = run.workspace(server_number, self.net_file_name)
+        self.sumo_file_path = str(self.simulation_path / f'{self.net_file_name}_{server_number}.sumocfg')
+        self.trip_file_path = str(self.simulation_path / f'trip_{server_number}.xml')
+        self.routes_output_file_path = str(self.simulation_path / f'routes_output_{server_number}.xml')
+        self.statistic_output_file_path = str(self.simulation_path / f'statistic_{server_number}.xml')
 
         self.tls_dict = OrderedDict()
         self.incoming_lane_dict = OrderedDict()
@@ -183,7 +184,9 @@ class MATSC_Env(gym.Env, ABC):
         @return:
         """
         # Generate new sumo configuration files when resetting the environment and launch new simulation
-        gen_cfg_file(path=self.net_file_path, seed=seed, thread=self.server_number)
+        prepare_simulation(self.net_file_path, self.simulation_path)
+        gen_cfg_file(path=str(self.simulation_path), seed=seed, thread=self.server_number)
+        confine_config_outputs(self.sumo_file_path)
 
         self._phase_features = None
         self._attribute_features.clear()
@@ -805,32 +808,3 @@ class MATSC_Env(gym.Env, ABC):
                 for metric in ['step', 'reward', 'max_queues', 'queue_lengths']:
                     csv_line = csv_line + str(line[metric]) + ', '
                 output_file.write(csv_line + '\n')
-
-
-if __name__ == '__main__':
-    import os
-
-    os.chdir('../')
-    env = MATSC_Env(server_number=0)
-    obs_n = env.reset()
-    done = False
-    # max_length = 0
-    # for tls in env.tls_list:
-    #     for in_lane in env.tls_dict[tls].incoming_lane_list:
-    #         length = env.simulator.lane.getLength(in_lane)
-    #         if length > max_length:
-    #             max_length = length
-    #     for out_lane in env.tls_dict[tls].outgoing_lane_list:
-    #         length = env.simulator.lane.getLength(out_lane)
-    #         if length > max_length:
-    #             max_length = length
-    # print(max_length)
-    while not done:
-        action_dict = {}
-        for id in env.tls_list:
-            # action_dict[id] = np.random.randint(0, len(env.tls_dict[id].action_space))
-            # action_dict[id] = env.tls_dict[id].get_fixed_time_action()
-            # action_dict[id] = env.tls_dict[id].get_greedy_action()
-            action_dict[id] = env.tls_dict[id].get_pressure_action()
-        print('Time:{}'.format(env.simulator.simulation.getTime()))
-        next_obs, rewards, done, info = env.step(action_dict=action_dict)

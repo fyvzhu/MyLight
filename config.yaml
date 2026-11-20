@@ -1,5 +1,17 @@
-max_episodes: 3000
+max_episodes: 2000
 
 sumo:
   # Simulation backend: libsumo or traci. Both use SUMO 1.16.0.
   backend: libsumo
+
+evaluation:
+  # Unicorn, HeteroLight, FixedTime, Greedy, MaxPressure
+  algorithm: Unicorn
+  # Required for Unicorn/HeteroLight: model/checkpoint*.pkl (model_state_dict).
+  # Relative paths start at this project root. Use null for rule-based methods.
+  checkpoint:  "train_outputs/Unicorn/Unicorn_20261120_002703_390327/model/checkpoint1000.pkl"
+  network: grid_network_5_5
+  seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
+  policy_seed: 21
+  # Simulated seconds, excluding a scenario's initial clock offset.
+  max_steps: 3600

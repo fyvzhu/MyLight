@@ -7,6 +7,7 @@ import ray
 import random
 
 from utils import *
+from run_paths import RunPaths, project_path
 from runner_heterolight import Runner
 from models.HeteroLight import HeteroLight
 from torch.utils.tensorboard import SummaryWriter
@@ -176,7 +177,9 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
 
 
 def main():
-    global_env = set_env(server_number=None)
+    run = RunPaths.create('train', 'HeteroLight')
+    print('Training output:', run.root)
+    global_env = set_env(server_number=None, run=run)
     global_device = torch.device('cuda') if TRAIN_PARAMS.USE_GPU else torch.device('cpu')
     global_network = HeteroLight(input_dim=global_env.tls_obs_space,
                                  agent_dim=global_env.tls_all_agent_space,
@@ -187,36 +190,33 @@ def main():
     if TRAIN_PARAMS.LOAD_MODEL:
         assert TRAIN_PARAMS.EXPERIMENT_PATH is not None
         print('====== Loading model ======')
-        global_summary = SummaryWriter(TRAIN_PARAMS.EXPERIMENT_PATH + '/train')
-        checkpoint = torch.load(TRAIN_PARAMS.EXPERIMENT_PATH + '/model/checkpoint.pkl')
+        source_checkpoint = project_path(TRAIN_PARAMS.EXPERIMENT_PATH) / 'model/checkpoint.pkl'
+        checkpoint = torch.load(source_checkpoint)
         global_network.load_state_dict(checkpoint['model_state_dict'])
         global_network.actor_optimizer.load_state_dict(checkpoint['optimizer_state_dict'][0])
         global_network.critic_optimizer.load_state_dict(checkpoint['optimizer_state_dict'][1])
         curr_episode = checkpoint['epoch']
         torch.save(global_network.state_dict(),
-                   TRAIN_PARAMS.EXPERIMENT_PATH + '/model/state_dict_{}.pth'.format(curr_episode))
+                   run.model / 'state_dict_{}.pth'.format(curr_episode))
         print("====== Current episode set to {} ======\n".format(curr_episode))
 
     else:
         # Create New experiment directories
         print("====== Launching New Training ======")
-        create_dirs(params=EXPERIMENT_PARAMS)
-        global_summary = SummaryWriter(EXPERIMENT_PARAMS.TRAIN_PATH)
-        create_config_json(path=EXPERIMENT_PARAMS.CONFIG_FILE_PATH,
-                           params=create_config_dict())
+        source_checkpoint = None
         print('====== Logging Configuration ======\n')
 
         curr_episode = 0
 
+    global_summary = SummaryWriter(str(run.tensorboard))
+    run.save_config(checkpoint=source_checkpoint)
+
     # launch all the threads:
-    meta_agents = [Runner.remote(i) for i in range(TRAIN_PARAMS.NUM_META_AGENTS)]
+    meta_agents = [Runner.remote(i, run) for i in range(TRAIN_PARAMS.NUM_META_AGENTS)]
 
     # get the initial weights from the global network
     weights = global_network.state_dict()
-    if TRAIN_PARAMS.LOAD_MODEL:
-        torch.save(weights, TRAIN_PARAMS.EXPERIMENT_PATH + '/model/state_dict.pth')
-    else:
-        torch.save(weights, EXPERIMENT_PARAMS.MODEL_PATH + '/state_dict.pth')
+    torch.save(weights, run.model / 'state_dict.pth')
 
     # launch the first job (e.g. getGradient) on each runner
     job_list = []  # Ray ObjectIDs
@@ -257,17 +257,15 @@ def main():
 
             # get the updated weights from the global network
             weights = global_network.state_dict()
-            if TRAIN_PARAMS.LOAD_MODEL:
-                torch.save(weights, TRAIN_PARAMS.EXPERIMENT_PATH + '/model/state_dict.pth')
-            else:
-                torch.save(weights, EXPERIMENT_PARAMS.MODEL_PATH + '/state_dict.pth')
+            torch.save(weights, run.model / 'state_dict.pth')
             curr_episode += 1
 
             # start a new job on the recently completed agent with the updated weights
             # job_list.extend([meta_agents[info["id"]].job.remote(curr_episode)])
             job_list = []
-            for i, meta_agent in enumerate(meta_agents):
-                job_list.append(meta_agent.job.remote(curr_episode))
+            if curr_episode < INPUT_PARAMS.MAX_EPISODES:
+                for i, meta_agent in enumerate(meta_agents):
+                    job_list.append(meta_agent.job.remote(curr_episode))
 
             # save model
             if curr_episode % TRAIN_PARAMS.SAVE_MODEL_STEP == 0:
@@ -276,10 +274,7 @@ def main():
                               "optimizer_state_dict": [global_network.actor_optimizer.state_dict(),
                                                        global_network.critic_optimizer.state_dict()],
                               "epoch": curr_episode}
-                if TRAIN_PARAMS.LOAD_MODEL:
-                    path_checkpoint = "./" + TRAIN_PARAMS.EXPERIMENT_PATH + "/model/checkpoint{}.pkl".format(curr_episode)
-                else:
-                    path_checkpoint = "./" + EXPERIMENT_PARAMS.MODEL_PATH + "/checkpoint{}.pkl".format(curr_episode)
+                path_checkpoint = run.model / 'checkpoint{}.pkl'.format(curr_episode)
 
                 torch.save(checkpoint, path_checkpoint)
 
@@ -289,8 +284,10 @@ def main():
 
     except KeyboardInterrupt:
         print("CTRL-C pressed. killing remote workers")
+    finally:
         for a in meta_agents:
             ray.kill(a)
+        global_summary.close()
 
 
 if __name__ == "__main__":
