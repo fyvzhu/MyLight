@@ -4,7 +4,7 @@ from pathlib import Path
 import random
 import numpy as np
 import torch
-from parameters import INPUT_PARAMS, VALIDATION_PARAMS
+from parameters import INPUT_PARAMS, VALIDATION_PARAMS, NETWORK_PARAMS
 
 FORMAT_VERSION = 1
 
@@ -34,6 +34,7 @@ def model_schema(env, algorithm):
 
 def weights_snapshot(model, env, algorithm, completed_updates):
     return {'format_version': FORMAT_VERSION, 'schema': model_schema(env, algorithm),
+            'clipping': NETWORK_PARAMS.CLIPPING,
             'source_network': env.net_file_name, 'completed_updates': completed_updates,
             'validation_seeds': list(VALIDATION_PARAMS.SEEDS),
             'model_state_dict': {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}}

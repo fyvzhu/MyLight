@@ -54,6 +54,8 @@ class Runner(SamplingState):
         # Initialize dicts
         self.experience_buffers = [[] for _ in range(8)]
         self.return_buffers = [[] for _ in range(10)]
+        # Full old probabilities come from the actual rollout, without another forward.
+        self.sampled_policies = [] if NETWORK_PARAMS.CLIPPING == 'dppo_full_tv' else None
         self.bootstrap_values = None
         self.rnn_states_actor = None
         self.rnn_states_critic = None
@@ -103,6 +105,8 @@ class Runner(SamplingState):
                 raise NotImplementedError
             else:
                 multi_agent_rewards = multi_agent_local_rewards
+            if self.sampled_policies is not None:
+                self.sampled_policies.append(multi_agent_policy.detach().clone())
             # Store trajectory data
             self.experience_buffers[0].append(multi_agent_obs)
             self.experience_buffers[1].append(multi_agent_action)
@@ -155,6 +159,7 @@ class Runner(SamplingState):
             8. Batch neighbor actions vector (torch.tensor)
             9. Batch advantages (numpy array)
             10. Batch target values (numpy array)
+            Additional full sampled policy tensor for dppo_full_tv only.
         """
         gamma = NETWORK_PARAMS.GAMMA
 
@@ -201,6 +206,8 @@ class Runner(SamplingState):
         self.return_buffers[7] = batch_neighbor_actions_vec[:-1]
         self.return_buffers[8] = advantage_values
         self.return_buffers[9] = target_values
+        if self.sampled_policies is not None:
+            self.return_buffers.append(torch.cat(self.sampled_policies, dim=0)[:-1])
 
         return 0
 

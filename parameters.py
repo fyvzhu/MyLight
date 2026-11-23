@@ -10,9 +10,12 @@ if 'UNICORN_SETTINGS_JSON' in _os.environ:
 else:
     with _Path(__file__).with_name('config.yaml').open() as _config_file:
         _config = _yaml.safe_load(_config_file)
-if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
         or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
-    raise ValueError('config.yaml must contain max_episodes, training, validation, checkpoints, sumo, evaluation and early_stopping')
+    raise ValueError('config.yaml must contain max_episodes, clipping, training, validation, checkpoints, sumo, evaluation and early_stopping')
+_clipping = _config['clipping']
+if not isinstance(_clipping, str) or _clipping not in ('fixed_clipping', 'kl2clip', 'dppo_full_tv'):
+    raise ValueError('clipping must be fixed_clipping, kl2clip or dppo_full_tv')
 _max_episodes = _config['max_episodes']
 if type(_max_episodes) is not int or _max_episodes < 1:
     raise ValueError('max_episodes must be a positive integer')
@@ -198,6 +201,7 @@ class NETWORK_PARAMS:
     C_LR_Q              = 2.e-4
     GRAD_CLIP           = 10
     EPS_CLIP            = 0.2
+    CLIPPING            = _clipping
     K_EPOCH             = 6
 
 

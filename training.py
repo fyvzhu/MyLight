@@ -1,6 +1,7 @@
 """Shared lifecycle: sample -> PPO update -> source validation -> atomic commit.
 
-Drivers keep their original PPO calculations. A checkpoint is committed only at
+Drivers retain their network-specific PPO updates with configured policy clipping.
+A checkpoint is committed only at
 completed update boundaries, with root/worker RNGs and both optimizer states.
 Resume uses --resume-run on the same driver and writes into the same run.
 """
@@ -113,6 +114,7 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         run = RunPaths.create('train', algorithm)
         run.save_config()
     print('Training output:', run.root, flush=True)
+    print('PPO clipping:', NETWORK_PARAMS.CLIPPING, flush=True)
     device = torch.device('cuda') if TRAIN_PARAMS.USE_GPU else torch.device('cpu')
     env = set_env(None, run)
     model = Model(input_dim=env.tls_obs_space, agent_dim=env.tls_all_agent_space,

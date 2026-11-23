@@ -1,5 +1,12 @@
 # Number of complete sampling + PPO update rounds (each round uses all workers).
-max_episodes: 2000
+max_episodes: 3000
+
+# PPO policy clipping for Unicorn and HeteroLight.
+# fixed_clipping: original fixed [0.8, 1.2] surrogate.
+# kl2clip: tested discrete KL2Clip bounds (KL budget 0.006164264416724914).
+# dppo_full_tv: tested full legal-phase TV gate (radius 0.05).
+# Frozen for the run: keep unchanged when using --resume-run.
+clipping: fixed_clipping
 
 training:
   network: grid_network_5_5
@@ -20,7 +27,7 @@ validation:
   min_completion_ratio: 1.0
 
 early_stopping:
-  enabled: true
+  enabled: false
   # Validate/select best throughout training; only count patience AFTER this update.
   min_updates: 1000
   # Number of consecutive validations without significant eligible improvement.
@@ -43,7 +50,7 @@ evaluation:
   algorithm: Unicorn
   # Use train_outputs/<algorithm>/<run>/models/best_model.pkl for both tests.
   # Relative paths start at this project root. Use null for rule-based methods.
-  checkpoint: null
+  checkpoint: train_outputs/Unicorn/Unicorn_20261121_081115_932477/models/best_model.pkl
   network: grid_network_5_5
   seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
   policy_seed: 21

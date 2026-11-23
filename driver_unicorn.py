@@ -8,6 +8,7 @@ import random
 import torch.nn.functional as F
 
 from utils import *
+from ppo_clipping import PolicyClipping
 from runner_unicorn import Runner
 from models.Unicorn import Unicorn
 from torch.distributions.categorical import Categorical
@@ -44,7 +45,7 @@ def write_to_Tensorboard(global_summary, tensorboard_data, curr_episode, plot_me
     global_summary.add_scalar(tag='Perf/Action Change', scalar_value=action_change, global_step=curr_episode)
 
 
-def get_global_train_buffer(all_jobs, buffer_len=10):
+def get_global_train_buffer(all_jobs):
     """
     Combine experience buffers from all workers:
         1. Batch observations (torch.tensor)
@@ -57,7 +58,9 @@ def get_global_train_buffer(all_jobs, buffer_len=10):
         8. Batch neighbor actions vector (torch.tensor)
         9. Batch advantages (numpy array)
         10. Batch target values (numpy array)
+        Additional full sampled policy tensor for dppo_full_tv only.
     """
+    buffer_len = 10 + int(NETWORK_PARAMS.CLIPPING == 'dppo_full_tv')
     global_buffer = []
     global_metrics = []
     for i in range(buffer_len):
@@ -110,6 +113,10 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
     if norm_adv:
         batch_advantages = batch_advantages - batch_advantages.mean() / (batch_advantages.std() + 1e-5)
 
+    clipping = PolicyClipping(NETWORK_PARAMS.CLIPPING, batch_log_p_old,
+                              experience_buffers[-1] if NETWORK_PARAMS.CLIPPING == 'dppo_full_tv' else None,
+                              eps_clip)
+
     for k in range(k_epoch):
         network.actor_optimizer.zero_grad()
 
@@ -118,9 +125,7 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         # Calculate policy loss
         log_p = policy_dist.log_prob(batch_actions)
         imp_weights = torch.exp(log_p - batch_log_p_old)
-        surr1 = imp_weights * batch_advantages
-        surr2 = torch.clamp(imp_weights, 1.0 - eps_clip, 1.0 + eps_clip) * batch_advantages
-        policy_loss = -1 * torch.min(surr1, surr2).mean()
+        policy_loss, clip_mask = clipping.loss(policy, imp_weights, batch_advantages)
         entropy_loss = policy_dist.entropy().mean()
 
         # Calculate prediction loss for Actor VAE
@@ -185,7 +190,7 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
             actor_norm = get_gard_norm(network.actor_network.parameters())
         network.actor_optimizer.step()
 
-        clip_frac = imp_weights.detach().gt(1 + eps_clip) | imp_weights.detach().lt(1 - eps_clip)
+        clip_frac = clip_mask
         clip_frac = convert_to_tensor(data=clip_frac, data_type=torch.float32, device=device).mean()
 
         p_l += convert_to_item(policy_loss)
