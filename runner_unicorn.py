@@ -159,9 +159,11 @@ class Runner(SamplingState):
             8. Batch neighbor actions vector (torch.tensor)
             9. Batch advantages (numpy array)
             10. Batch target values (numpy array)
-            Additional full sampled policy tensor for dppo_full_tv only.
+            DisPPO: slot 9 contains quantile targets; slot 10 stores old quantiles.
+            Additional full sampled policy tensor for dppo_full_tv is always last.
         """
         gamma = NETWORK_PARAMS.GAMMA
+        distributional = self.local_network.ppo_variant == 'disppo'
 
         batch_obs = torch.stack(self.experience_buffers[0])
         batch_actions = torch.stack(self.experience_buffers[1])
@@ -177,24 +179,33 @@ class Runner(SamplingState):
             multi_agent_value, _, _, _, _ = self.local_network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec,
                                                                          batch_phase_mask, None, batch_neighbor_actions_vec)
 
-        adv_list, tar_v_list, bootstrap_v_list = [], [], []
-        for i, tls in enumerate(self.env.tls_list):
-            value_plus = multi_agent_value.clone().numpy()[:, i, :].reshape(-1)
-            rewards = batch_reward[:, i]
-            reward_plus = np.append(rewards.reshape(-1)[:-1], value_plus[-1])
+        if distributional:
+            from disppo import distributional_gae
+            # Same original T-1 transition fragment and Tth observed-state
+            # bootstrap; the last stored action remains outside both updates.
+            rewards = convert_to_tensor(batch_reward[:-1], torch.float32, self.device)
+            advantage_values, target_values = distributional_gae(
+                rewards, multi_agent_value[:-1], multi_agent_value[-1], gamma,
+                self.local_network.disppo_config['gae_lambda'])
+        else:
+            adv_list, tar_v_list, bootstrap_v_list = [], [], []
+            for i, tls in enumerate(self.env.tls_list):
+                value_plus = multi_agent_value.clone().numpy()[:, i, :].reshape(-1)
+                rewards = batch_reward[:, i]
+                reward_plus = np.append(rewards.reshape(-1)[:-1], value_plus[-1])
 
-            # Calculate target values
-            target_values = calculate_discount_return(reward_plus, gamma)[:-1]
+                # Calculate target values
+                target_values = calculate_discount_return(reward_plus, gamma)[:-1]
 
-            # Calculate advantages
-            deltas = reward_plus[:-1] + gamma * value_plus[1:] - value_plus[:-1]
-            advantage_values = calculate_discount_return(deltas, gamma * 0.95)
+                # Calculate advantages
+                deltas = reward_plus[:-1] + gamma * value_plus[1:] - value_plus[:-1]
+                advantage_values = calculate_discount_return(deltas, gamma * 0.95)
 
-            tar_v_list.append(target_values)
-            adv_list.append(advantage_values)
+                tar_v_list.append(target_values)
+                adv_list.append(advantage_values)
 
-        target_values = convert_to_tensor(data=np.stack(tar_v_list).T, data_type=torch.float32, device=self.device)
-        advantage_values = convert_to_tensor(data=np.stack(adv_list).T, data_type=torch.float32, device=self.device)
+            target_values = convert_to_tensor(data=np.stack(tar_v_list).T, data_type=torch.float32, device=self.device)
+            advantage_values = convert_to_tensor(data=np.stack(adv_list).T, data_type=torch.float32, device=self.device)
 
         self.return_buffers[0] = batch_obs[:-1]
         self.return_buffers[1] = batch_actions[:-1]
@@ -206,6 +217,8 @@ class Runner(SamplingState):
         self.return_buffers[7] = batch_neighbor_actions_vec[:-1]
         self.return_buffers[8] = advantage_values
         self.return_buffers[9] = target_values
+        if distributional:
+            self.return_buffers.append(multi_agent_value[:-1])
         if self.sampled_policies is not None:
             self.return_buffers.append(torch.cat(self.sampled_policies, dim=0)[:-1])
 

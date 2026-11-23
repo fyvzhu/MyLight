@@ -8,6 +8,7 @@ from evaluation import seed_policy
 from parameters import VALIDATION_PARAMS, SUMO_PARAMS
 from run_paths import RunPaths
 from utils import set_env
+from model_io import evaluation_model
 
 
 def validate(root, algorithm, checkpoint=None):
@@ -24,12 +25,7 @@ def validate(root, algorithm, checkpoint=None):
             evaluator = Evaluator(env, run)
         else:
             from evaluator_rl import Evaluator
-            if algorithm == 'Unicorn':
-                from models.Unicorn import Unicorn as Model
-            else:
-                from models.HeteroLight import HeteroLight as Model
-            model = Model(input_dim=env.tls_obs_space, agent_dim=env.tls_agent_space,
-                          int_vec_dim=env.tls_int_attr_space, actor_lr=1e-4, critic_lr=1e-4)
+            model = evaluation_model(env, algorithm, checkpoint)
             evaluator = Evaluator(env, model, run)
             evaluator.load_model(checkpoint, validation=True)
         for index, seed in enumerate(VALIDATION_PARAMS.SEEDS):

@@ -262,7 +262,8 @@ class ActorNet(nn.Module):
 
 
 class CriticNet(nn.Module):
-    def __init__(self, input_dim, agent_dim, int_vec_dim, hidden_dim=256, vae_hidden_dim=20):
+    def __init__(self, input_dim, agent_dim, int_vec_dim, hidden_dim=256, vae_hidden_dim=20,
+                 disppo_config=None):
         super().__init__()
         self.input_dim = input_dim  # [max_num_movement, movement_feat]
         self.flat_dim = input_dim[0] * input_dim[1]
@@ -316,6 +317,16 @@ class CriticNet(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim*2, 1),
         )
+
+        self.disppo_config = disppo_config
+        if disppo_config is not None:
+            from disppo import OrderedQuantileOffsets
+            # Adding a value head must not shift the Actor's subsequent sampling
+            # RNG stream in paired ablations or checkpoint-driven evaluation.
+            with torch.random.fork_rng(devices=[]):
+                self.quantile_head = OrderedQuantileOffsets(
+                    hidden_dim * 2, disppo_config['num_quantiles'],
+                    disppo_config['initial_quantile_spacing'])
 
     def forward(self, state, phase_vector, int_vector, mask, h_n, neighbor_action_vector, num_meta):
         # State normalization
@@ -374,22 +385,43 @@ class CriticNet(nn.Module):
 
         # [b, n, 1]
         state_embedding = torch.cat((state_embedding, z), -1)
-        value = self.value_layer(state_embedding).reshape(batch_dim, self.agent_dim * num_meta, -1)
         mask = mask.reshape(batch_dim, self.agent_dim*num_meta, -1)
-        value[mask.bool()] = 0
-        value = torch.sum(value, -1, keepdim=True)
+        # Keep the entire original scalar MLP and legal-phase sum in both
+        # variants. Expose its features for a junction-level offset head only.
+        phase_features = self.value_layer[1](self.value_layer[0](state_embedding))
+        value = self.value_layer[2](phase_features).reshape(*mask.shape)
+        value = value.masked_fill(mask.bool(), 0).sum(-1, keepdim=True)
+        if self.disppo_config is not None:
+            phase_features = phase_features.reshape(*mask.shape, -1)
+            invalid = mask.bool().unsqueeze(-1)
+            count = (~invalid).sum(-2)
+            if (count == 0).any():
+                raise ValueError('DisPPO requires at least one legal phase per junction')
+            # Pool only the OFFSET features; the value mean above stays the
+            # original sum, independent of the number of legal phases.
+            pooled = phase_features.masked_fill(invalid, 0).sum(-2) / count
+            value = value + self.quantile_head(pooled)
 
         return value, h_n, prediction, mu.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim), logvar.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim)
 
 
 class Unicorn(nn.Module):
-    def __init__(self, input_dim, agent_dim, int_vec_dim, actor_lr, critic_lr):
+    def __init__(self, input_dim, agent_dim, int_vec_dim, actor_lr, critic_lr,
+                 ppo_variant=None, disppo_config=None):
         super().__init__()
+        from parameters import NETWORK_PARAMS
+        from disppo import validate_config
+        self.ppo_variant = NETWORK_PARAMS.PPO_VARIANT if ppo_variant is None else ppo_variant
+        if self.ppo_variant not in ('unicorn', 'disppo'):
+            raise ValueError('ppo_variant must be unicorn or disppo')
+        self.disppo_config = (validate_config(NETWORK_PARAMS.DISPPO if disppo_config is None else disppo_config)
+                              if self.ppo_variant == 'disppo' else None)
         self.input_dim = input_dim
         self.agent_dim = agent_dim
 
         self.actor_network = ActorNet(input_dim=self.input_dim, agent_dim=self.agent_dim, int_vec_dim=int_vec_dim)
-        self.critic_network = CriticNet(input_dim=self.input_dim, agent_dim=self.agent_dim, int_vec_dim=int_vec_dim)
+        self.critic_network = CriticNet(input_dim=self.input_dim, agent_dim=self.agent_dim, int_vec_dim=int_vec_dim,
+                                       disppo_config=self.disppo_config)
 
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr

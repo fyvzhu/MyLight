@@ -83,6 +83,12 @@ def convert_to_numpy(tensor):
     return tensor.cpu().detach().numpy()
 
 
+def normalize_advantages(advantages, eps=1e-5):
+    """Shared PPO standardization: center the whole batch, then scale it."""
+    std = advantages.std(unbiased=advantages.numel() > 1)
+    return (advantages - advantages.mean()) / (std + eps)
+
+
 def convert_to_tensor(data, data_type, device):
     if device is None:
         return torch.as_tensor(data=data,

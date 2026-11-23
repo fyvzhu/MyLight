@@ -4,7 +4,7 @@ from collections import OrderedDict
 from run_paths import RunPaths
 from evaluation import evaluation_settings, seed_policy
 from evaluation_metrics import EvaluationReport
-from model_io import load_weights
+from model_io import load_weights, evaluation_model
 from parameters import EVALUATION_PARAMS
 from torch.distributions.categorical import Categorical
 from utils import convert_to_tensor, save_as_csv
@@ -145,19 +145,13 @@ def main():
     run = RunPaths.create('evaluate', algorithm)
     print('Evaluation output:', run.root)
     env = set_env(server_number=0, run=run, test=True, network=EVALUATION_PARAMS.NETWORK)
-    if algorithm == 'Unicorn':
-        from models.Unicorn import Unicorn as Model
-    else:
-        from models.HeteroLight import HeteroLight as Model
-    model = Model(input_dim=env.tls_obs_space,
-                  agent_dim=env.tls_agent_space,
-                  int_vec_dim=env.tls_int_attr_space,
-                  actor_lr=1e-4, critic_lr=1e-4)
+    model = evaluation_model(env, algorithm, checkpoint)
     evaluator = Evaluator(env=env, model=model, run=run)
     saved = evaluator.load_model(checkpoint)
     run.save_config(checkpoint=checkpoint, model_source={
         'training_network': saved['source_network'], 'completed_updates': saved['completed_updates'],
-        'schema': saved['schema'], 'selection': saved.get('selection')})
+        'schema': saved['schema'], 'selection': saved.get('selection'),
+        'ppo': saved.get('ppo')})
     print('Random seeds:', EVALUATION_PARAMS.SEEDS)
     try:
         for i, seed in enumerate(EVALUATION_PARAMS.SEEDS):

@@ -33,11 +33,41 @@ def model_schema(env, algorithm):
 
 
 def weights_snapshot(model, env, algorithm, completed_updates):
-    return {'format_version': FORMAT_VERSION, 'schema': model_schema(env, algorithm),
+    payload = {'format_version': FORMAT_VERSION, 'schema': model_schema(env, algorithm),
             'clipping': NETWORK_PARAMS.CLIPPING,
+            'advantage_normalization': NETWORK_PARAMS.ADVANTAGE_NORMALIZATION,
             'source_network': env.net_file_name, 'completed_updates': completed_updates,
             'validation_seeds': list(VALIDATION_PARAMS.SEEDS),
             'model_state_dict': {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}}
+    if algorithm == 'Unicorn':
+        payload['ppo'] = ppo_metadata(model)
+    return payload
+
+
+def ppo_metadata(model):
+    spec = {'variant': model.ppo_variant, 'disppo': model.disppo_config}
+    if model.ppo_variant == 'disppo':
+        spec['value_head'] = 'phase_sum_zero_mean_offsets'
+    return spec
+
+
+def evaluation_model(env, algorithm, checkpoint):
+    """Create the saved architecture, independently of the next training config."""
+    options = {}
+    if algorithm == 'Unicorn':
+        from models.Unicorn import Unicorn as Model
+        saved = torch.load(checkpoint, map_location='cpu')
+        # Original Unicorn checkpoints predate the optional distributional module.
+        spec = saved.get('ppo', {'variant': 'unicorn', 'disppo': None})
+        options = {'ppo_variant': spec['variant'], 'disppo_config': spec['disppo']}
+        if spec['variant'] == 'disppo' and spec['disppo'] is None:
+            raise ValueError('DisPPO checkpoint is missing its distributional configuration')
+    elif algorithm == 'HeteroLight':
+        from models.HeteroLight import HeteroLight as Model
+    else:
+        raise ValueError(f'No learning model for {algorithm}')
+    return Model(input_dim=env.tls_obs_space, agent_dim=env.tls_agent_space,
+                 int_vec_dim=env.tls_int_attr_space, actor_lr=1e-4, critic_lr=1e-4, **options)
 
 
 def load_weights(path, model, env, algorithm, device):
@@ -48,6 +78,10 @@ def load_weights(path, model, env, algorithm, device):
     if checkpoint.get('schema') != expected:
         raise ValueError(f'Checkpoint input/action schema {checkpoint.get("schema")} differs from target {expected}; '
                          'changing intersection count is supported, changing movement/phase schema is not')
+    if algorithm == 'Unicorn':
+        saved_ppo = checkpoint.get('ppo', {'variant': 'unicorn', 'disppo': None})
+        if saved_ppo != ppo_metadata(model):
+            raise ValueError(f'Checkpoint PPO module {saved_ppo} differs from model {ppo_metadata(model)}')
     model.load_state_dict(checkpoint['model_state_dict'])
     return checkpoint
 

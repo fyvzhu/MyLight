@@ -10,9 +10,14 @@ if 'UNICORN_SETTINGS_JSON' in _os.environ:
 else:
     with _Path(__file__).with_name('config.yaml').open() as _config_file:
         _config = _yaml.safe_load(_config_file)
-if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'ppo_variant', 'disppo', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
         or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
-    raise ValueError('config.yaml must contain max_episodes, clipping, training, validation, checkpoints, sumo, evaluation and early_stopping')
+    raise ValueError('config.yaml must contain max_episodes, clipping, ppo_variant, disppo, training, validation, checkpoints, sumo, evaluation and early_stopping')
+_ppo_variant = _config['ppo_variant']
+if _ppo_variant not in ('unicorn', 'disppo'):
+    raise ValueError('ppo_variant must be unicorn or disppo')
+from disppo import validate_config as _validate_disppo
+_disppo = _validate_disppo(_config['disppo'])
 _clipping = _config['clipping']
 if not isinstance(_clipping, str) or _clipping not in ('fixed_clipping', 'kl2clip', 'dppo_full_tv'):
     raise ValueError('clipping must be fixed_clipping, kl2clip or dppo_full_tv')
@@ -186,6 +191,11 @@ class TRAIN_PARAMS:
 
 
 class NETWORK_PARAMS:
+    # Included in the frozen training contract; never resume old optimizer/RNG
+    # states silently across this intentional correction to PPO update math.
+    ADVANTAGE_NORMALIZATION = 'centered_std_v1'
+    PPO_VARIANT         = _ppo_variant
+    DISPPO              = _disppo
     CO_TRAIN            = INPUT_PARAMS.CO_TRAIN
     OBS_TYPE            = INPUT_PARAMS.OBS_TYPE
     UPDATE_TYPE         = INPUT_PARAMS.UPDATE_TYPE

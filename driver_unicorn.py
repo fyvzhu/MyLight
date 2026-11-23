@@ -58,9 +58,11 @@ def get_global_train_buffer(all_jobs):
         8. Batch neighbor actions vector (torch.tensor)
         9. Batch advantages (numpy array)
         10. Batch target values (numpy array)
-        Additional full sampled policy tensor for dppo_full_tv only.
+        DisPPO: slot 9 contains quantile targets; slot 10 stores old quantiles.
+        Additional full sampled policy tensor for dppo_full_tv is always last.
     """
-    buffer_len = 10 + int(NETWORK_PARAMS.CLIPPING == 'dppo_full_tv')
+    buffer_len = (10 + int(NETWORK_PARAMS.PPO_VARIANT == 'disppo')
+                  + int(NETWORK_PARAMS.CLIPPING == 'dppo_full_tv'))
     global_buffer = []
     global_metrics = []
     for i in range(buffer_len):
@@ -110,8 +112,9 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
 
     batch_advantages = experience_buffers[8].to(device)
     batch_target_values = experience_buffers[9].to(device)
+    distributional = network.ppo_variant == 'disppo'
     if norm_adv:
-        batch_advantages = batch_advantages - batch_advantages.mean() / (batch_advantages.std() + 1e-5)
+        batch_advantages = normalize_advantages(batch_advantages)
 
     clipping = PolicyClipping(NETWORK_PARAMS.CLIPPING, batch_log_p_old,
                               experience_buffers[-1] if NETWORK_PARAMS.CLIPPING == 'dppo_full_tv' else None,
@@ -205,8 +208,15 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         values, _, prediction, mu, logvar = network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, batch_neighbor_actions_vec, num_meta)
 
         # Calculate value loss
-        value_loss = torch.square(values.squeeze(-1) - batch_target_values)
-        value_loss = torch.mean(value_loss)
+        if distributional:
+            from disppo import quantile_huber_loss
+            value_loss = quantile_huber_loss(
+                values, batch_target_values, experience_buffers[10].to(device),
+                kappa=network.disppo_config['huber_kappa'],
+                value_clip=network.disppo_config['value_clip'])
+        else:
+            value_loss = torch.square(values.squeeze(-1) - batch_target_values)
+            value_loss = torch.mean(value_loss)
 
         # Calculate prediction loss for Critic VAE
         prediction = prediction.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, prediction.size(-1))).reshape(prediction.size(0), prediction.size(1), -1)

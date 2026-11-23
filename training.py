@@ -115,6 +115,8 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         run.save_config()
     print('Training output:', run.root, flush=True)
     print('PPO clipping:', NETWORK_PARAMS.CLIPPING, flush=True)
+    if algorithm == 'Unicorn':
+        print('PPO variant:', NETWORK_PARAMS.PPO_VARIANT, flush=True)
     device = torch.device('cuda') if TRAIN_PARAMS.USE_GPU else torch.device('cpu')
     env = set_env(None, run)
     model = Model(input_dim=env.tls_obs_space, agent_dim=env.tls_all_agent_space,

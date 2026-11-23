@@ -102,7 +102,7 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
     batch_advantages = experience_buffers[7].to(device)
     batch_target_values = experience_buffers[8].to(device)
     if norm_adv:
-        batch_advantages = batch_advantages - batch_advantages.mean() / (batch_advantages.std() + 1e-5)
+        batch_advantages = normalize_advantages(batch_advantages)
 
     clipping = PolicyClipping(NETWORK_PARAMS.CLIPPING, batch_log_p_old,
                               experience_buffers[-1] if NETWORK_PARAMS.CLIPPING == 'dppo_full_tv' else None,

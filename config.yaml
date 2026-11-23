@@ -1,7 +1,25 @@
 # Number of complete sampling + PPO update rounds (each round uses all workers).
 max_episodes: 3000
 
-# PPO policy clipping for Unicorn and HeteroLight.
+# Unicorn training module: unicorn (scalar Critic) or disppo (quantile Critic).
+# Shared Actor, simulator, auxiliary losses and training/validation lifecycle.
+# Both use corrected (A - mean(A)) / (std(A) + eps) advantage normalization.
+# DisPPO preserves the scalar phase-value sum as its distribution mean and adds
+# ordered, zero-mean junction offsets. No mean-pooled value replacement.
+# Frozen when resuming a run. Evaluation reads the architecture from checkpoint.
+ppo_variant: unicorn
+disppo:
+  # Odd count >= 3; default is the previously tested 17-quantile head.
+  num_quantiles: 17
+  # TD(lambda) distributional targets; gamma stays at NETWORK_PARAMS.GAMMA.
+  gae_lambda: 0.95
+  huber_kappa: 1.0
+  # Initial distance between neighboring quantiles (traffic return units).
+  initial_quantile_spacing: 0.1
+  # Optional per-quantile value clipping; null matches the tested adaptation.
+  value_clip: null
+
+# PPO policy clipping for either Unicorn ppo_variant and for HeteroLight.
 # fixed_clipping: original fixed [0.8, 1.2] surrogate.
 # kl2clip: tested discrete KL2Clip bounds (KL budget 0.006164264416724914).
 # dppo_full_tv: tested full legal-phase TV gate (radius 0.05).
