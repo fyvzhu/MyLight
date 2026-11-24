@@ -1,5 +1,5 @@
 # Number of complete sampling + PPO update rounds (each round uses all workers).
-max_episodes: 3000
+max_episodes: 2500
 
 # Unicorn training module: unicorn (scalar Critic) or disppo (quantile Critic).
 # Shared Actor, simulator, auxiliary losses and training/validation lifecycle.
@@ -26,18 +26,44 @@ disppo:
 # Frozen for the run: keep unchanged when using --resume-run.
 clipping: fixed_clipping
 
+# Unicorn training only. Independent of ppo_variant and clipping.
+# false preserves the current fixed entropy coefficient 0.002 and training path.
+# true uses global AES; DisPPO supplies the mean of its sampled quantiles.
+# Frozen when resuming; AES changes training, not frozen-model evaluation.
+aes: true
+aes_config:
+  q: 0.9
+  ema_decay: 0.95
+  # Independent 40-update Grid5x5 pilot calibration; configurable for new studies.
+  kappa: 0.0016828572303074895
+  minimum: 0.0004
+  maximum: 0.008
+
 training:
-  network: grid_network_5_5
+  # single: one network; joint: at least two different networks, one shared model.
+  # Worker count is the sum of workers below. Single-mode defaults retain six.
+  mode: single
   seed: 0
+  networks:
+    - name: grid_network_5_5
+      workers: 6
+  # Official six-network joint setup: set mode: joint and replace networks with:
+  #   - {name: cologne_network_8, workers: 1}
+  #   - {name: ingolstadt_network_21, workers: 1}
+  #   - {name: arterial_network_4_4, workers: 1}
+  #   - {name: grid_network_4_4, workers: 1}
+  #   - {name: shaoxing_network_7, workers: 1}
+  #   - {name: shenzhen_network_29, workers: 1}
 
 validation:
-  # Validate on the training network after this many completed PPO updates.
+  # Validate every training network after this many completed PPO updates.
   # Also validates at the final update; each validation commits a resumable checkpoint.
   interval: 200
   seeds: [21001, 21002, 21003, 21004, 21005]
   policy_seed: 2026
   max_steps: 3600
-  # Minimize source-network Queue Length; invalid/empty-trip runs cannot win.
+  # Minimize Queue Length (macro mean across networks in joint mode).
+  # Every network/seed must pass the completion constraint; no test-network selection.
   metric: Queue Length
   completion_reference: MaxPressure
   # Per validation seed: candidate completed veh/s >= reference completed veh/s * ratio.
@@ -56,7 +82,7 @@ early_stopping:
 
 checkpoints:
   # Independent of validation.interval: limit work lost after interruption.
-  interval: 300
+  interval: 50
   keep: 2
 
 sumo:
@@ -68,7 +94,7 @@ evaluation:
   algorithm: Unicorn
   # Use train_outputs/<algorithm>/<run>/models/best_model.pkl for both tests.
   # Relative paths start at this project root. Use null for rule-based methods.
-  checkpoint: train_outputs/Unicorn/Unicorn_20261121_081115_932477/models/best_model.pkl
+  checkpoint: train_outputs/Unicorn/Unicorn_20261123_225458_953825/models/best_model.pkl
   network: grid_network_5_5
   seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
   policy_seed: 21

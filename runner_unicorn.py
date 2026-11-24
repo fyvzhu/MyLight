@@ -179,6 +179,10 @@ class Runner(SamplingState):
             multi_agent_value, _, _, _, _ = self.local_network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec,
                                                                          batch_phase_mask, None, batch_neighbor_actions_vec)
 
+        if AES_PARAMS.ENABLED:
+            from aes import rollout_td
+            self.aes_td = rollout_td(batch_reward, multi_agent_value, gamma)
+
         if distributional:
             from disppo import distributional_gae
             # Same original T-1 transition fragment and Tth observed-state
@@ -245,5 +249,11 @@ class Runner(SamplingState):
         # Get the job results from the learning agents
         # and send them back to the master network
         info = {"id": self.id}
+        if INPUT_PARAMS.CO_TRAIN:
+            info.update(network=self.env.net_file_name, agents=self.env.tls_agent_space)
+        if AES_PARAMS.ENABLED:
+            # Named metadata preserves all existing buffer indices, including
+            # DisPPO's old quantiles and dppo_full_tv's trailing old policy.
+            info['aes_td'] = self.aes_td
 
         return job_results, metrics, info

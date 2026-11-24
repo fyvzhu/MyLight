@@ -16,12 +16,13 @@ from run_paths import PROJECT_ROOT, prepare_simulation, confine_config_outputs
 
 
 class MATSC_Env(gym.Env, ABC):
-    def __init__(self, server_number, run, test=False, network=None):
+    def __init__(self, server_number, run, test=False, network=None, schema=None):
         super(MATSC_Env, self).__init__()
 
         self.test = test
         self.server_number = server_number
         self.run = run
+        self.representation_schema = schema
 
         self.config_data = None
         self.tls_list = None
@@ -127,16 +128,17 @@ class MATSC_Env(gym.Env, ABC):
             else:
                 self.outgoing_lane_state_dict[out_lane] = 0
 
-        # For padding across all different scenarios, the maximum movement dimension is 36, the maximum phase dimension is 8
-        if self.co_train:
-            self.tls_max_movement_dim = 36
-            self.tls_max_phase_dim = 8
-            self.tls_all_agent_space = 97
-        else:
-            self.tls_max_movement_dim = np.max([len(self.tls_dict[tls].traffic_movement_list) for tls in self.tls_list])
-            self.tls_max_phase_dim = np.max([len(self.tls_dict[tls].action_space) for tls in self.tls_list])
-            self.tls_agent_space = len(self.tls_list)
-            self.tls_all_agent_space = len(self.tls_list)
+        self.tls_max_movement_dim = int(np.max([len(self.tls_dict[tls].traffic_movement_list) for tls in self.tls_list]))
+        self.tls_max_phase_dim = int(np.max([len(self.tls_dict[tls].action_space) for tls in self.tls_list]))
+        self.tls_all_agent_space = len(self.tls_list)
+        if self.co_train and not self.test:
+            self.tls_max_movement_dim = SCENARIO_PARAMS.LAYOUT['movement_dim']
+            self.tls_max_phase_dim = SCENARIO_PARAMS.LAYOUT['max_phases']
+            self.tls_all_agent_space = SCENARIO_PARAMS.LAYOUT['total_agents']
+        if self.representation_schema is not None:
+            from training_scenarios import apply_schema
+            self.tls_max_movement_dim, self.tls_max_phase_dim = apply_schema(
+                self.tls_max_movement_dim, self.tls_max_phase_dim, self.representation_schema)
         # For Unicorn
         self.tls_agent_space = len(self.tls_list)
         self.tls_movement_feat_dim = 8

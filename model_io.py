@@ -4,7 +4,7 @@ from pathlib import Path
 import random
 import numpy as np
 import torch
-from parameters import INPUT_PARAMS, VALIDATION_PARAMS, NETWORK_PARAMS
+from parameters import INPUT_PARAMS, VALIDATION_PARAMS, NETWORK_PARAMS, AES_PARAMS, SCENARIO_PARAMS
 
 FORMAT_VERSION = 1
 
@@ -39,9 +39,32 @@ def weights_snapshot(model, env, algorithm, completed_updates):
             'source_network': env.net_file_name, 'completed_updates': completed_updates,
             'validation_seeds': list(VALIDATION_PARAMS.SEEDS),
             'model_state_dict': {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}}
+    if INPUT_PARAMS.CO_TRAIN:
+        payload['source_network'] = None
+        payload['scenarios'] = scenario_metadata()
     if algorithm == 'Unicorn':
         payload['ppo'] = ppo_metadata(model)
+        if AES_PARAMS.ENABLED:
+            from aes import VERSION
+            payload['aes'] = {'version': VERSION, 'config': dict(AES_PARAMS.CONFIG)}
     return payload
+
+
+def scenario_metadata():
+    return {'mode': SCENARIO_PARAMS.MODE,
+            'networks': [dict(r) for r in SCENARIO_PARAMS.NETWORKS],
+            'worker_networks': list(SCENARIO_PARAMS.WORKER_NETWORKS),
+            'layout': SCENARIO_PARAMS.LAYOUT}
+
+
+def checkpoint_schema(path, algorithm):
+    """Obtain saved input padding before constructing an evaluation environment."""
+    saved = torch.load(path, map_location='cpu')
+    schema = saved.get('schema')
+    if (saved.get('format_version') != FORMAT_VERSION or not isinstance(schema, dict)
+            or schema.get('algorithm') != algorithm or schema.get('observation') != INPUT_PARAMS.OBS_TYPE):
+        raise ValueError('Unsupported/incompatible checkpoint schema')
+    return schema
 
 
 def ppo_metadata(model):
@@ -103,10 +126,15 @@ def restore_rng(state):
 class SamplingState:
     """Only called at completed rollout boundaries, when SUMO has closed."""
     def sampling_state(self):
-        return {'rng': capture_rng(), 'sumo_seed': self.env.seed,
-                'completed_episode': self.curr_episode}
+        state = {'rng': capture_rng(), 'sumo_seed': self.env.seed,
+                 'completed_episode': self.curr_episode}
+        if INPUT_PARAMS.CO_TRAIN:
+            state['network'] = self.env.net_file_name
+        return state
 
     def restore_sampling_state(self, state):
+        if INPUT_PARAMS.CO_TRAIN and state.get('network') != self.env.net_file_name:
+            raise ValueError('Restored Worker belongs to a different training network')
         self.env.seed = state['sumo_seed']
         self.curr_episode = state['completed_episode']
         restore_rng(state['rng'])

@@ -216,5 +216,7 @@ class Runner(SamplingState):
         # Get the job results from the learning agents
         # and send them back to the master network
         info = {"id": self.id}
+        if INPUT_PARAMS.CO_TRAIN:
+            info.update(network=self.env.net_file_name, agents=self.env.tls_agent_space)
 
         return job_results, metrics, info

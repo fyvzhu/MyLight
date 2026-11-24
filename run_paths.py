@@ -72,11 +72,15 @@ class RunPaths:
         config = {'stage': self.stage, 'algorithm': self.algorithm, 'run_dir': str(self.root), 'sumo': sumo}
         if self.stage == 'train':
             config.update(settings=settings._config, max_episodes=settings.INPUT_PARAMS.MAX_EPISODES,
+                          sampling_runtime_env=dict(settings.SAMPLING_RUNTIME_ENV),
                           input=_public(settings.INPUT_PARAMS), training=_public(settings.TRAIN_PARAMS),
                           network=_public(settings.NETWORK_PARAMS),
                           validation=_public(settings.VALIDATION_PARAMS),
                           early_stopping=_public(settings.EARLY_STOPPING_PARAMS),
                           test_seeds=settings.EVALUATION_PARAMS.SEEDS)
+            if settings.INPUT_PARAMS.CO_TRAIN:
+                from model_io import scenario_metadata
+                config['scenarios'] = scenario_metadata()
         else:
             config['evaluation'] = _public(settings.EVALUATION_PARAMS)
         if checkpoint is not None:

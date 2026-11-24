@@ -5,19 +5,21 @@ import json
 from pathlib import Path
 
 from evaluation import seed_policy
-from parameters import VALIDATION_PARAMS, SUMO_PARAMS
+from parameters import VALIDATION_PARAMS, SUMO_PARAMS, SCENARIO_PARAMS
 from run_paths import RunPaths
 from utils import set_env
-from model_io import evaluation_model
+from model_io import evaluation_model, checkpoint_schema
+from training_scenarios import merge_validation
 
 
-def validate(root, algorithm, checkpoint=None):
+def validate_network(root, algorithm, checkpoint=None, network=None):
     root = Path(root)
     run = RunPaths(root, 'evaluate', algorithm)
     run.data.mkdir(parents=True, exist_ok=True)
     run.simulation.mkdir(parents=True, exist_ok=True)
     seed_policy(VALIDATION_PARAMS.POLICY_SEED)
-    env = set_env(0, run, test=True, network=SUMO_PARAMS.NET_NAME)
+    env = set_env(0, run, test=True, network=network or SUMO_PARAMS.NET_NAME,
+                  schema=checkpoint_schema(checkpoint, algorithm) if checkpoint else None)
     env.max_test_step = VALIDATION_PARAMS.MAX_STEPS
     try:
         if checkpoint is None:
@@ -40,9 +42,26 @@ def validate(root, algorithm, checkpoint=None):
         if checkpoint is not None:
             report['checkpoint_sha256'] = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
         path.write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+        return report
     finally:
         if env.simulator.isLoaded():
             env.simulator.close()
+
+
+def validate(root, algorithm, checkpoint=None):
+    if SCENARIO_PARAMS.MODE == 'single':
+        return validate_network(root, algorithm, checkpoint)
+    root = Path(root)
+    reports = {item['name']: validate_network(root/item['name'], algorithm, checkpoint, item['name'])
+               for item in SCENARIO_PARAMS.NETWORKS}
+    report = merge_validation(reports)
+    report.update(seeds=VALIDATION_PARAMS.SEEDS, policy_seed=VALIDATION_PARAMS.POLICY_SEED,
+                  max_steps=VALIDATION_PARAMS.MAX_STEPS)
+    if checkpoint:
+        report['checkpoint_sha256'] = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
+    (root/'data').mkdir(exist_ok=True)
+    (root/'data/metrics.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+    return report
 
 
 if __name__ == '__main__':

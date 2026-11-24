@@ -83,7 +83,9 @@ def get_global_train_buffer(all_jobs):
     return global_buffer, global_metrics
 
 
-def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=True):
+def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=True, entropy_scheduler=None):
+    if AES_PARAMS.ENABLED != (entropy_scheduler is not None):
+        raise ValueError('AES flag and training entropy scheduler must agree')
     co_train = NETWORK_PARAMS.CO_TRAIN
     k_epoch = NETWORK_PARAMS.K_EPOCH
     eps_clip = NETWORK_PARAMS.EPS_CLIP
@@ -130,6 +132,8 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         imp_weights = torch.exp(log_p - batch_log_p_old)
         policy_loss, clip_mask = clipping.loss(policy, imp_weights, batch_advantages)
         entropy_loss = policy_dist.entropy().mean()
+        if entropy_scheduler is not None:
+            el_factor = entropy_scheduler.coefficient(entropy_loss)
 
         # Calculate prediction loss for Actor VAE
         prediction = prediction.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, prediction.size(-1))).reshape(prediction.size(0), prediction.size(1), -1)

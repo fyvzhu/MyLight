@@ -4,7 +4,7 @@ from collections import OrderedDict
 from run_paths import RunPaths
 from evaluation import evaluation_settings, seed_policy
 from evaluation_metrics import EvaluationReport
-from model_io import load_weights, evaluation_model
+from model_io import load_weights, evaluation_model, checkpoint_schema
 from parameters import EVALUATION_PARAMS
 from torch.distributions.categorical import Categorical
 from utils import convert_to_tensor, save_as_csv
@@ -144,14 +144,18 @@ def main():
     seed_policy(EVALUATION_PARAMS.POLICY_SEED)
     run = RunPaths.create('evaluate', algorithm)
     print('Evaluation output:', run.root)
-    env = set_env(server_number=0, run=run, test=True, network=EVALUATION_PARAMS.NETWORK)
+    env = set_env(server_number=0, run=run, test=True, network=EVALUATION_PARAMS.NETWORK,
+                  schema=checkpoint_schema(checkpoint, algorithm))
     model = evaluation_model(env, algorithm, checkpoint)
     evaluator = Evaluator(env=env, model=model, run=run)
     saved = evaluator.load_model(checkpoint)
-    run.save_config(checkpoint=checkpoint, model_source={
+    source = {
         'training_network': saved['source_network'], 'completed_updates': saved['completed_updates'],
         'schema': saved['schema'], 'selection': saved.get('selection'),
-        'ppo': saved.get('ppo')})
+        'ppo': saved.get('ppo')}
+    if 'scenarios' in saved:
+        source['training_scenarios'] = saved['scenarios']
+    run.save_config(checkpoint=checkpoint, model_source=source)
     print('Random seeds:', EVALUATION_PARAMS.SEEDS)
     try:
         for i, seed in enumerate(EVALUATION_PARAMS.SEEDS):

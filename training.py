@@ -17,24 +17,64 @@ import ray
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import parameters as settings
-from parameters import INPUT_PARAMS, TRAIN_PARAMS, NETWORK_PARAMS, SUMO_PARAMS, VALIDATION_PARAMS, EVALUATION_PARAMS
+from parameters import INPUT_PARAMS, TRAIN_PARAMS, NETWORK_PARAMS, SUMO_PARAMS, VALIDATION_PARAMS, EVALUATION_PARAMS, AES_PARAMS
 from evaluation import seed_policy
 from early_stopping import initial_state, observe_validation
-from model_io import atomic_save, capture_rng, restore_rng, weights_snapshot, load_weights
+from model_io import atomic_save, capture_rng, restore_rng, weights_snapshot, load_weights, scenario_metadata
 from run_paths import RunPaths, PROJECT_ROOT, project_path, _public
 from utils import set_env
 
 
 def training_contract(algorithm):
-    return {'algorithm': algorithm, 'max_episodes': INPUT_PARAMS.MAX_EPISODES,
+    contract = {'algorithm': algorithm, 'max_episodes': INPUT_PARAMS.MAX_EPISODES,
             'input': _public(INPUT_PARAMS), 'training': _public(TRAIN_PARAMS),
             'network': _public(NETWORK_PARAMS), 'sumo': _public(SUMO_PARAMS),
             'validation': _public(VALIDATION_PARAMS),
             'early_stopping': _public(settings.EARLY_STOPPING_PARAMS), 'test_seeds': EVALUATION_PARAMS.SEEDS}
+    # Keep disabled contracts byte-for-byte equivalent as data, including for
+    # existing pre-AES checkpoints. Enabling/changing AES requires a new run.
+    if AES_PARAMS.ENABLED:
+        from aes import VERSION
+        contract['aes'] = {'version': VERSION, 'config': dict(AES_PARAMS.CONFIG)}
+    if INPUT_PARAMS.CO_TRAIN:
+        contract['scenarios'] = scenario_metadata()
+    return contract
+
+
+def prepare_aes_log(path, completed):
+    """Drop diagnostics beyond the latest committed checkpoint on recovery."""
+    if not path.exists():
+        return
+    rows = []
+    for line in path.read_text().splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # A crash may truncate the last uncommitted append.
+        if row['completed_updates'] <= completed:
+            rows.append(row)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(''.join(json.dumps(row, allow_nan=False) + '\n' for row in rows))
+    os.replace(temporary, path)
 
 
 def validation_score(report, reference, ratio):
     """One objective, with per-seed completion eligibility; never use test results."""
+    if 'networks' in report or 'networks' in reference:
+        current, refs = report.get('networks'), reference.get('networks')
+        if (not isinstance(current, dict) or not current or not isinstance(refs, dict)
+                or list(current) != list(refs)):
+            raise ValueError('Candidate/reference training networks do not match')
+        scores, failures = [], []
+        for name in current:
+            score, reason = validation_score(current[name], refs[name], ratio)
+            if score is None:
+                failures.append(f'{name}: {reason}')
+            else:
+                scores.append(score)
+        if failures:
+            return None, '; '.join(failures)
+        return sum(scores)/len(scores), None
     rows, refs = report['episodes'], reference['episodes']
     if [r['seed'] for r in rows] != [r['seed'] for r in refs] or not rows:
         raise ValueError('Candidate/reference validation seeds do not match')
@@ -95,12 +135,16 @@ def commit(run, payload):
 
 
 def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=None):
-    if INPUT_PARAMS.CO_TRAIN:
-        raise ValueError('Source-network validation requires CO_TRAIN=False; this pipeline trains one source network')
+    if AES_PARAMS.ENABLED and algorithm != 'Unicorn':
+        raise ValueError('aes=true currently applies to the Unicorn driver only')
     if settings.JOB_TYPE != settings.JOB_OPTIONS.GET_EXPERIENCE or NETWORK_PARAMS.UPDATE_TYPE != 'PPO_MAC':
         raise ValueError('This training pipeline requires PPO_MAC experience sampling')
     seed_policy(TRAIN_PARAMS.SEED)
     contract = training_contract(algorithm)
+    entropy_scheduler = None
+    if AES_PARAMS.ENABLED:
+        from aes import AdaptiveEntropy
+        entropy_scheduler = AdaptiveEntropy(AES_PARAMS.CONFIG)
     checkpoint = None
     if resume_run:
         run = RunPaths(project_path(resume_run), 'train', algorithm)
@@ -110,13 +154,21 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         checkpoint = torch.load(candidates[-1], map_location='cpu')
         if checkpoint.get('training_state', {}).get('contract') != contract:
             raise ValueError('Training/validation settings differ from the frozen checkpoint configuration')
+        if entropy_scheduler is not None:
+            entropy_scheduler.load_state_dict(checkpoint['training_state'].get('aes'))
+            if entropy_scheduler.step != checkpoint['completed_updates'] * NETWORK_PARAMS.K_EPOCH:
+                raise ValueError('AES clock differs from the committed Actor update count')
     else:
         run = RunPaths.create('train', algorithm)
         run.save_config()
     print('Training output:', run.root, flush=True)
     print('PPO clipping:', NETWORK_PARAMS.CLIPPING, flush=True)
+    if INPUT_PARAMS.CO_TRAIN:
+        print('Joint training:', scenario_metadata(), flush=True)
     if algorithm == 'Unicorn':
         print('PPO variant:', NETWORK_PARAMS.PPO_VARIANT, flush=True)
+        if entropy_scheduler is not None:
+            print('Adaptive entropy:', dict(AES_PARAMS.CONFIG), flush=True)
     device = torch.device('cuda') if TRAIN_PARAMS.USE_GPU else torch.device('cpu')
     env = set_env(None, run)
     model = Model(input_dim=env.tls_obs_space, agent_dim=env.tls_all_agent_space,
@@ -138,7 +190,7 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         write_selection(run, selection)
         print(f'[Resume] completed updates={completed}; continuing in the same directory', flush=True)
     else:
-        print('[Validation] Calibrating MaxPressure completion reference on source-network validation seeds', flush=True)
+        print('[Validation] Calibrating MaxPressure completion reference on training-network validation seeds', flush=True)
         reference = run_validation(run, 'reference', VALIDATION_PARAMS.COMPLETION_REFERENCE)
         if any(r['completed_vehicles'] <= 0 or not math.isfinite(r['Trip Completion Rate']) for r in reference['episodes']):
             raise ValueError('Validation reference has no completed trips; increase validation.max_steps or inspect demand')
@@ -151,12 +203,21 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         print(f'[Training] already finished ({selection["stop_reason"]}); '
               'no updates or validation repeated', flush=True)
         return run
+    if entropy_scheduler is not None:
+        prepare_aes_log(run.root / 'aes.jsonl', completed)
     initial_rng = capture_rng()
     workers = []
     summary = None
     try:
-        ray.init(num_gpus=TRAIN_PARAMS.NUM_GPU if TRAIN_PARAMS.USE_GPU else 0,
-                 runtime_env={'env_vars': {'UNICORN_SETTINGS_JSON': json.dumps(settings._config)}})
+        print('[Sampling runtime]', settings.SAMPLING_RUNTIME_ENV, flush=True)
+        # Persistent actors each reserve one logical CPU. Declare the configured
+        # capacity so an explicit Worker plan cannot wait forever for the last
+        # actors when the container CPU quota is smaller than that plan.
+        ray.init(num_cpus=TRAIN_PARAMS.NUM_META_AGENTS,
+                 num_gpus=TRAIN_PARAMS.NUM_GPU if TRAIN_PARAMS.USE_GPU else 0,
+                 runtime_env={'env_vars': {
+                     'UNICORN_SETTINGS_JSON': json.dumps(settings._config),
+                     **settings.SAMPLING_RUNTIME_ENV}})
         summary = SummaryWriter(str(run.tensorboard), purge_step=completed + 1 if checkpoint else None)
         workers = [Runner.remote(i, run) for i in range(TRAIN_PARAMS.NUM_META_AGENTS)]
         if checkpoint is not None:
@@ -177,6 +238,8 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                 'contract': contract, 'optimizers': [model.actor_optimizer.state_dict(), model.critic_optimizer.state_dict()],
                 'rng': capture_rng(), 'workers': ray.get([w.sampling_state.remote() for w in workers]),
                 'summary_window': window, 'selection': selection}
+            if entropy_scheduler is not None:
+                payload['training_state']['aes'] = entropy_scheduler.state_dict()
             summary.flush()
             commit(run, payload)
 
@@ -187,8 +250,30 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
             # Fixed worker order is important for reproducible shuffling on resume.
             jobs = ray.get([worker.job.remote(completed + 1) for worker in workers])
             buffers, metrics = combine(jobs)
-            train_metrics = update(network=model, device=device, experience_buffers=buffers)
+            if INPUT_PARAMS.CO_TRAIN:
+                # Keep network identities for diagnostics without changing the
+                # original junction-weighted PPO/auxiliary objective.
+                for item in settings.SCENARIO_PARAMS.NETWORKS:
+                    name = item['name']
+                    group = [j for j in jobs if j[2]['network'] == name]
+                    if len(group) != item['workers']:
+                        raise ValueError('Collected Worker/network mapping differs from the frozen plan')
+                    summary.add_scalar(f'Training/{name}/Reward', sum(j[1][0] for j in group)/len(group), completed+1)
+                    summary.add_scalar(f'Training/{name}/JunctionTransitions',
+                                       sum(j[0][0][0].shape[0]*j[2]['agents'] for j in group), completed+1)
+            if entropy_scheduler is not None:
+                entropy_scheduler.begin_batch(torch.cat([job[2]['aes_td'] for job in jobs], dim=1))
+                train_metrics = update(network=model, device=device, experience_buffers=buffers,
+                                       entropy_scheduler=entropy_scheduler)
+            else:
+                train_metrics = update(network=model, device=device, experience_buffers=buffers)
             completed += 1
+            if entropy_scheduler is not None:
+                diagnostics = entropy_scheduler.diagnostics(NETWORK_PARAMS.K_EPOCH)
+                for name, value in diagnostics.items():
+                    summary.add_scalar('AES/' + name, value, completed)
+                with (run.root / 'aes.jsonl').open('a') as stream:
+                    stream.write(json.dumps({'completed_updates': completed, **diagnostics}, allow_nan=False) + '\n')
             window.append(list(train_metrics) + list(metrics))
             print(f'[Training] completed update {completed}/{INPUT_PARAMS.MAX_EPISODES}', flush=True)
             if len(window) >= TRAIN_PARAMS.SUMMARY_WINDOW or completed == INPUT_PARAMS.MAX_EPISODES:
@@ -220,6 +305,8 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                                      stop_reason='no_significant_validation_improvement', stopped_update=completed)
                 summary.add_scalar('EarlyStopping/Bad Validations', selection['early_stopping']['bad_validations'], completed)
                 summary.add_scalar('Validation/Queue Length', report['aggregate']['Queue Length']['mean'], completed)
+                for name, part in report.get('networks', {}).items():
+                    summary.add_scalar(f'Validation/{name}/Queue Length', part['aggregate']['Queue Length']['mean'], completed)
                 summary.add_scalar('Validation/Eligible', int(score is not None), completed)
                 print(f'[Validation] update={completed} eligible={score is not None} Queue Length={score} '
                       f'best_update={selection["best_update"]} reason={reason}', flush=True)

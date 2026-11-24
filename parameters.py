@@ -10,9 +10,16 @@ if 'UNICORN_SETTINGS_JSON' in _os.environ:
 else:
     with _Path(__file__).with_name('config.yaml').open() as _config_file:
         _config = _yaml.safe_load(_config_file)
-if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'ppo_variant', 'disppo', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping'}
+from aes import DEFAULT_CONFIG as _aes_defaults, validate_config as _validate_aes
+# Older frozen settings predate AES. Missing new fields retain the disabled path.
+if isinstance(_config, dict):
+    _config = {'aes': False, 'aes_config': dict(_aes_defaults), **_config}
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'ppo_variant', 'disppo', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping', 'aes', 'aes_config'}
         or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
-    raise ValueError('config.yaml must contain max_episodes, clipping, ppo_variant, disppo, training, validation, checkpoints, sumo, evaluation and early_stopping')
+    raise ValueError('config.yaml has missing/unknown fields; expected training, evaluation, PPO and AES settings')
+if type(_config['aes']) is not bool:
+    raise ValueError('aes must be a YAML boolean true or false')
+_aes_config = _validate_aes(_config['aes_config'])
 _ppo_variant = _config['ppo_variant']
 if _ppo_variant not in ('unicorn', 'disppo'):
     raise ValueError('ppo_variant must be unicorn or disppo')
@@ -53,13 +60,12 @@ if type(_evaluation['max_steps']) is not int or _evaluation['max_steps'] <= 0:
 _training = _config['training']
 _validation = _config['validation']
 _checkpoints = _config['checkpoints']
-if not isinstance(_training, dict) or set(_training) != {'network', 'seed'}:
-    raise ValueError('training must contain network and seed')
-if (not isinstance(_training['network'], str) or _Path(_training['network']).name != _training['network']
-        or not (_Path(__file__).parent / 'maps' / _training['network'] / f"{_training['network']}_config.json").is_file()):
-    raise ValueError('training.network must name an existing maps directory')
-if type(_training['seed']) is not int or not 0 <= _training['seed'] < 2**32 - 10000:
-    raise ValueError('training.seed must be a nonnegative integer below 2**32 - 10000')
+from training_scenarios import parse_training as _parse_training, worker_networks as _worker_networks, joint_layout as _joint_layout
+_training = _parse_training(_training, _Path(__file__).parent)
+_config['training'] = _training
+_workers = _worker_networks(_training)
+_joint = _training['mode'] == 'joint'
+_layout = _joint_layout(_training, _Path(__file__).parent) if _joint else None
 if not isinstance(_validation, dict) or set(_validation) != {'interval', 'seeds', 'policy_seed', 'max_steps', 'metric', 'completion_reference', 'min_completion_ratio'}:
     raise ValueError('validation must contain interval, seeds, policy_seed, max_steps, metric, completion_reference and min_completion_ratio')
 for _key in ('interval', 'max_steps'):
@@ -103,6 +109,18 @@ if (type(_early_stopping['min_relative_improvement']) not in (int, float)
     raise ValueError('early_stopping.min_relative_improvement must be in [0, 1)')
 
 
+class AES_PARAMS:
+    ENABLED = _config['aes']
+    CONFIG = _aes_config
+
+
+class SCENARIO_PARAMS:
+    MODE = _training['mode']
+    NETWORKS = _training['networks']
+    WORKER_NETWORKS = _workers
+    LAYOUT = _layout
+
+
 class EARLY_STOPPING_PARAMS:
     ENABLED = _early_stopping['enabled']
     MIN_UPDATES = _early_stopping['min_updates']
@@ -123,10 +141,10 @@ class VALIDATION_PARAMS:
 
 class INPUT_PARAMS:
     MAX_EPISODES        = _max_episodes
-    NUM_META_AGENTS     = 6
+    NUM_META_AGENTS     = len(_workers)
     OBS_TYPE            = 'V1'  # ['V1', 'V2']
     UPDATE_TYPE         = 'PPO_MAC'
-    CO_TRAIN            = False
+    CO_TRAIN            = _joint
 
 
 class EVALUATION_PARAMS:
@@ -143,9 +161,11 @@ class SUMO_PARAMS:
     # MA2C DATASETS: 'grid_network_5_5', 'monaco_network_30',
     # RESCO DATASETS: 'cologne_network_8', 'ingolstadt_network_21', 'arterial_network_4_4', 'grid_network_4_4'
     # GESA DATASETS: 'shaoxing_network_7', 'shenzhen_network_29', 'shenzhen_network_55'
-    ALL_DATASETS        = ['cologne_network_8', 'ingolstadt_network_21', 'arterial_network_4_4',
-                           'grid_network_4_4', 'shaoxing_network_7', 'shenzhen_network_29']
-    NET_NAME            = _training['network']
+    # Preserve legacy single-mode contracts; joint mode uses the actual mapping.
+    ALL_DATASETS        = (_workers if _joint else
+                           ['cologne_network_8', 'ingolstadt_network_21', 'arterial_network_4_4',
+                            'grid_network_4_4', 'shaoxing_network_7', 'shenzhen_network_29'])
+    NET_NAME            = _training['networks'][0]['name']
     CO_TRAIN            = INPUT_PARAMS.CO_TRAIN
     GUI                 = False
     RANDOM_SEED         = True
@@ -172,6 +192,15 @@ class SUMO_PARAMS:
     FLOW                = 325
     # baseline route for 16 singapore network
     SG_FLOW             = 1100
+
+
+# Ray applies these before importing PyTorch/OpenMP in sampling processes.
+# This is a fixed execution policy, not a second sampler or a learning setting.
+SAMPLING_RUNTIME_ENV = {
+    'OMP_NUM_THREADS': '14',
+    'MKL_NUM_THREADS': '14',
+    'OMP_WAIT_POLICY': 'PASSIVE',
+}
 
 
 class TRAIN_PARAMS:
