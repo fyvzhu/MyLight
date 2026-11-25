@@ -71,8 +71,8 @@ _config['training'] = _training
 _workers = _worker_networks(_training)
 _joint = _training['mode'] == 'joint'
 _layout = _joint_layout(_training, _Path(__file__).parent) if _joint else None
-if not isinstance(_validation, dict) or set(_validation) != {'interval', 'seeds', 'policy_seed', 'max_steps', 'metric', 'completion_reference', 'min_completion_ratio'}:
-    raise ValueError('validation must contain interval, seeds, policy_seed, max_steps, metric, completion_reference and min_completion_ratio')
+if not isinstance(_validation, dict) or set(_validation) != {'interval', 'seeds', 'policy_seed', 'max_steps', 'metric'}:
+    raise ValueError('validation must contain only interval, seeds, policy_seed, max_steps and metric')
 for _key in ('interval', 'max_steps'):
     if type(_validation[_key]) is not int or _validation[_key] < 1:
         raise ValueError(f'validation.{_key} must be a positive integer')
@@ -82,13 +82,8 @@ if (not isinstance(_validation['seeds'], list) or not _validation['seeds']
     raise ValueError('validation.seeds must be distinct integers in [0, 100000)')
 if type(_validation['policy_seed']) is not int or not 0 <= _validation['policy_seed'] < 2**32:
     raise ValueError('validation.policy_seed must be an integer in [0, 2**32)')
-if _validation['metric'] != 'Queue Length':
-    raise ValueError('validation.metric must be Queue Length (lower is better)')
-if _validation['completion_reference'] != 'MaxPressure':
-    raise ValueError('validation.completion_reference must be MaxPressure')
-if (type(_validation['min_completion_ratio']) not in (int, float)
-        or not 0 < _validation['min_completion_ratio'] <= 1):
-    raise ValueError('validation.min_completion_ratio must be in (0, 1]')
+if _validation['metric'] != 'ATT':
+    raise ValueError('validation.metric must be ATT (lower is better)')
 if set(_validation['seeds']) & set(_evaluation['seeds']):
     raise ValueError('Validation and final evaluation SUMO seeds must be disjoint')
 if len(set(_validation['seeds']) | set(_evaluation['seeds'])) >= 100000:
@@ -144,8 +139,6 @@ class VALIDATION_PARAMS:
     POLICY_SEED = _validation['policy_seed']
     MAX_STEPS = _validation['max_steps']
     METRIC = _validation['metric']
-    COMPLETION_REFERENCE = _validation['completion_reference']
-    MIN_COMPLETION_RATIO = _validation['min_completion_ratio']
 
 
 

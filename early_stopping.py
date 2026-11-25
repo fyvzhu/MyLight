@@ -9,9 +9,9 @@ def initial_state():
 
 
 def observe_validation(state, completed_updates, score, best_score, config):
-    """Consume one successful validation (score=None means ineligible, not crashed).
+    """Consume one completed validation (score=None means invalid ATT, not crashed).
 
-    best_score is the lowest eligible score observed so far. It controls best
+    best_score is the lowest valid mean ATT observed so far. It controls best
     weight selection elsewhere; anchor_score only controls meaningful progress.
     The first validation strictly AFTER min_updates counts toward patience.
     """
@@ -27,7 +27,7 @@ def observe_validation(state, completed_updates, score, best_score, config):
         state['anchor_score'] = best_score
         state['bad_validations'] = 0
         return False
-    # No qualified model is not convergence. Keep trying until the budget cap.
+    # No valid model is not convergence. Keep trying until the budget cap.
     if best_score is None:
         return False
     state['monitoring'] = True
@@ -35,7 +35,7 @@ def observe_validation(state, completed_updates, score, best_score, config):
         state['anchor_score'] = best_score
         return False
     anchor = state['anchor_score']
-    # Strict decrease matters for zero queues and a zero improvement threshold.
+    # A zero improvement threshold still requires a strict ATT decrease.
     significant = (score is not None and score < anchor
                    and score <= anchor * (1 - config['min_relative_improvement']))
     if significant:

@@ -70,18 +70,17 @@ value or advantage normalization.
 Validation and best-model selection
 -----------------------------------
 
-The existing `validation` block is sufficient. Every unique training network
-is validated using the configured seeds and duration, regardless of its number
-of Workers. The fixed MaxPressure reference is obtained for every such network.
-Every network/seed must satisfy the existing completion/validity constraint;
-an average completion rate cannot conceal one failed network or seed.
-
-Once all constraints pass, the score is the equal-weight mean of the networks'
-mean Queue Length. In single mode this is exactly the previous score. A joint
-reference/candidate is written to:
+Every unique training network is validated using the configured seeds and
+duration, regardless of its number of Workers. The only selection metric is
+ATT: the mean travel time of completed trips, averaged equally across fixed
+validation seeds and then equally across training networks. Every seed needs
+at least one completed trip and finite positive ATT; empty-trip zero values
+cannot win. Queue Length and completion flow remain diagnostics, not ranking
+criteria or MaxPressure-based thresholds. There is no reference simulation.
+See `BEST_MODEL_SELECTION.md` for the T-REX citation and adaptation details.
+A joint candidate is written to:
 
 ```
-validation/reference/<network>/data/metrics.json
 validation/update_XXXXXXXX/<network>/data/metrics.json
 validation/update_XXXXXXXX/data/metrics.json   # macro summary with all subreports
 validation/selection.json
@@ -89,10 +88,10 @@ validation/selection.json
 
 The macro JSON's mean gives each network equal weight; its std describes the
 network means. Each leaf report retains its original per-seed statistics.
-No validation seed, duration or completion threshold is silently reduced.
+No validation seed or duration is silently reduced.
 Joint validation therefore costs more simulation time than validating one map.
 TensorBoard includes per-network training reward/sample counts and validation
-Queue Length, alongside the existing global training and AES diagnostics.
+ATT, Queue Length and Trip Completion Rate, alongside training and AES diagnostics.
 
 Evaluation and checkpoint compatibility
 ---------------------------------------
@@ -109,10 +108,12 @@ The six-network example excludes Grid5x5. Evaluating its model on Grid5x5 is
 unseen-network transfer. To train on Grid5x5, add it explicitly to the training
 list. Held-out test networks never participate in validation/model selection.
 
-Single-mode checkpoints retain their previous schema and contract. Old runs
-can be resumed when their original settings and Worker count match. Joint
-checkpoints additionally freeze the complete network/Worker plan and shared
-layout, and check each Worker's network identity on restoration. Continue with:
+Model representation schemas are unchanged, so existing frozen models remain
+usable for evaluation. Training checkpoints now freeze the ATT selection rule.
+Runs created under the former selection rule cannot be resumed or migrated;
+start a new run. Within the new rule, checkpoints also freeze the complete
+network/Worker plan and shared layout, and check each Worker's network identity
+on restoration. Continue a new-rule run with:
 
 ```
 python driver_unicorn.py --resume-run train_outputs/Unicorn/<run>

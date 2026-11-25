@@ -81,22 +81,20 @@ validation:
   seeds: [21001, 21002, 21003, 21004, 21005]
   policy_seed: 2026
   max_steps: 3600
-  # Minimize Queue Length (macro mean across networks in joint mode).
-  # Every network/seed must pass the completion constraint; no test-network selection.
-  metric: Queue Length
-  completion_reference: MaxPressure
-  # Per validation seed: candidate completed veh/s >= reference completed veh/s * ratio.
-  # 1.0 means at least the reference flow; fix this rule before the experiment.
-  min_completion_ratio: 1.0
+  # T-REX-inspired selection: minimize mean travel time on fixed validation seeds.
+  # This evaluates ONE frozen checkpoint, not a window of changing training policies.
+  # Joint mode gives each training-network mean equal weight. Test data never select.
+  # Every network/seed needs completed trips and finite positive ATT.
+  metric: ATT
 
 early_stopping:
   enabled: false
   # Validate/select best throughout training; only count patience AFTER this update.
   min_updates: 1000
-  # Number of consecutive validations without significant eligible improvement.
+  # Number of consecutive validations without significant valid improvement.
   patience: 3
-  # Cumulative decrease from the last significant Queue Length improvement (1%).
-  # Smaller eligible decreases still update best_model, but do not reset patience.
+  # Cumulative decrease from the last significant validation ATT improvement (1%).
+  # Smaller valid decreases still update best_model, but do not reset patience.
   min_relative_improvement: 0.01
 
 checkpoints:
@@ -129,10 +127,9 @@ evaluation:
 # and evaluation.checkpoint can change for same-network / unseen-network testing.
 #
 # train_outputs/<algorithm>/<run>/
-#   models/best_model.pkl               selected weights; absent if none qualifies
+#   models/best_model.pkl               lowest validation ATT; absent if none is valid
 #   models/checkpoints/checkpoint_*.pkl last checkpoints.keep complete training states
 #   models/sampling_weights.pth         internal worker exchange; overwritten
-#   validation/reference/               fixed MaxPressure validation results
 #   validation/update_XXXXXXXX/         candidate validation CSVs + metrics
 #   validation/selection.json           all validation scores and selection decisions
 #   tensorboard/                        training and validation curves

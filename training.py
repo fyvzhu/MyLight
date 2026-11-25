@@ -25,8 +25,12 @@ from run_paths import RunPaths, PROJECT_ROOT, project_path, _public
 from utils import set_env
 
 
+SELECTION_RULE = 'trex_inspired_validation_att_v1'
+
+
 def training_contract(algorithm):
     contract = {'algorithm': algorithm, 'max_episodes': INPUT_PARAMS.MAX_EPISODES,
+            'selection_rule': SELECTION_RULE,
             'input': _public(INPUT_PARAMS), 'training': _public(TRAIN_PARAMS),
             'network': _public(NETWORK_PARAMS), 'sumo': _public(SUMO_PARAMS),
             'validation': _public(VALIDATION_PARAMS),
@@ -61,16 +65,20 @@ def prepare_aes_log(path, completed):
     os.replace(temporary, path)
 
 
-def validation_score(report, reference, ratio):
-    """One objective, with per-seed completion eligibility; never use test results."""
-    if 'networks' in report or 'networks' in reference:
-        current, refs = report.get('networks'), reference.get('networks')
-        if (not isinstance(current, dict) or not current or not isinstance(refs, dict)
-                or list(current) != list(refs)):
-            raise ValueError('Candidate/reference training networks do not match')
+def validation_score(report, seeds, networks):
+    """Mean ATT for one frozen policy, with equal seed/network weights.
+
+    Inspired by T-REX section 3.5's minimum mean travel-time criterion;
+    fixed independent validation replaces its consecutive training window.
+    Empty trips are invalid measurements, never a zero-ATT winner.
+    """
+    if 'networks' in report:
+        current = report['networks']
+        if not isinstance(current, dict) or not current or list(current) != networks:
+            raise ValueError('Validation report training networks do not match the configured plan')
         scores, failures = [], []
         for name in current:
-            score, reason = validation_score(current[name], refs[name], ratio)
+            score, reason = validation_score(current[name], seeds, [name])
             if score is None:
                 failures.append(f'{name}: {reason}')
             else:
@@ -78,30 +86,28 @@ def validation_score(report, reference, ratio):
         if failures:
             return None, '; '.join(failures)
         return sum(scores)/len(scores), None
-    rows, refs = report['episodes'], reference['episodes']
-    if [r['seed'] for r in rows] != [r['seed'] for r in refs] or not rows:
-        raise ValueError('Candidate/reference validation seeds do not match')
+    if len(networks) != 1 or report.get('network') != networks[0]:
+        raise ValueError('Validation report does not cover the configured training networks')
+    rows = report['episodes']
+    if [r['seed'] for r in rows] != seeds or not rows:
+        raise ValueError('Validation report seeds do not match the fixed validation seeds')
     failures = []
-    for row, ref in zip(rows, refs):
-        throughput = row['Trip Completion Rate']
-        queue = row['Queue Length']
-        if (row['completed_vehicles'] <= 0 or queue is None or not math.isfinite(queue)
-                or throughput is None or not math.isfinite(throughput)
-                or throughput < ref['Trip Completion Rate'] * ratio):
+    for row in rows:
+        count, att = row.get('completed_vehicles'), row.get('ATT')
+        if (type(count) is not int or count <= 0 or type(att) not in (int, float)
+                or not math.isfinite(att) or att <= 0):
             failures.append(row['seed'])
     if failures:
-        return None, f'completion/validity constraint failed for seeds {failures}'
-    return sum(r['Queue Length'] for r in rows) / len(rows), None
+        return None, f'No completed trips or invalid ATT for validation seeds {failures}'
+    return sum(r['ATT'] for r in rows) / len(rows), None
 
 
-def run_validation(run, name, algorithm, checkpoint=None):
+def run_validation(run, name, algorithm, checkpoint):
     output = run.root / 'validation' / name
     if output.exists():
         shutil.rmtree(output)  # Retry of this uncommitted validation only.
     args = [sys.executable, '-B', '-u', str(PROJECT_ROOT / 'validation_runner.py'),
-            '--output', str(output), '--algorithm', algorithm]
-    if checkpoint is not None:
-        args += ['--checkpoint', str(checkpoint)]
+            '--output', str(output), '--algorithm', algorithm, '--checkpoint', str(checkpoint)]
     # Separate process and CPU policy isolate all RNGs, SUMO and CUDA resources.
     env = {**os.environ, 'CUDA_VISIBLE_DEVICES': '', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1',
            'UNICORN_SETTINGS_JSON': json.dumps(settings._config)}
@@ -115,7 +121,7 @@ def write_selection(run, selection):
     directory = run.root / 'validation'
     directory.mkdir(exist_ok=True)
     report = {k: v for k, v in selection.items() if k != 'best_weights'}
-    report['status'] = 'selected' if selection['best_weights'] else 'no_eligible_model'
+    report['status'] = 'selected' if selection['best_weights'] else 'no_valid_model'
     temporary = directory / 'selection.json.tmp'
     temporary.write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
     os.replace(temporary, directory / 'selection.json')
@@ -204,12 +210,7 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         write_selection(run, selection)
         print(f'[Resume] completed updates={completed}; continuing in the same directory', flush=True)
     else:
-        print('[Validation] Calibrating MaxPressure completion reference on training-network validation seeds', flush=True)
-        reference = run_validation(run, 'reference', VALIDATION_PARAMS.COMPLETION_REFERENCE)
-        if any(r['completed_vehicles'] <= 0 or not math.isfinite(r['Trip Completion Rate']) for r in reference['episodes']):
-            raise ValueError('Validation reference has no completed trips; increase validation.max_steps or inspect demand')
-        selection = {'reference': reference, 'metric': VALIDATION_PARAMS.METRIC,
-                     'min_completion_ratio': VALIDATION_PARAMS.MIN_COMPLETION_RATIO,
+        selection = {'rule': SELECTION_RULE, 'metric': VALIDATION_PARAMS.METRIC,
                      'best_score': None, 'best_update': None, 'best_weights': None, 'history': [],
                      'early_stopping': initial_state(), 'training_status': 'running',
                      'stop_reason': None, 'stopped_update': None}
@@ -317,32 +318,40 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                 candidate = weights_snapshot(model, env, algorithm, completed)
                 atomic_save(candidate, sampling_path)
                 report = run_validation(run, f'update_{completed:08d}', algorithm, sampling_path)
-                score, reason = validation_score(report, selection['reference'], VALIDATION_PARAMS.MIN_COMPLETION_RATIO)
+                score, reason = validation_score(report, VALIDATION_PARAMS.SEEDS,
+                    [item['name'] for item in settings.SCENARIO_PARAMS.NETWORKS])
                 improved = score is not None and (selection['best_score'] is None or score < selection['best_score'])
                 if improved:
                     selection['best_score'], selection['best_update'] = score, completed
-                    candidate['selection'] = {'metric': VALIDATION_PARAMS.METRIC, 'score': score,
+                    candidate['selection'] = {'rule': SELECTION_RULE,
+                                              'metric': VALIDATION_PARAMS.METRIC, 'score': score,
                                               'validation_seeds': VALIDATION_PARAMS.SEEDS,
-                                              'min_completion_ratio': VALIDATION_PARAMS.MIN_COMPLETION_RATIO}
+                                              'aggregation': 'equal weight per network mean over validation seeds'}
                     selection['best_weights'] = candidate
                 stop_now = observe_validation(selection['early_stopping'], completed, score,
                                               selection['best_score'], settings._config['early_stopping'])
-                selection['history'].append({'completed_updates': completed, 'eligible': score is not None,
+                selection['history'].append({'completed_updates': completed, 'valid': score is not None,
                                              'score': score, 'reason': reason, 'new_best': improved, 'report': report,
                                              'early_stopping': dict(selection['early_stopping'])})
                 if stop_now:
                     selection.update(training_status='early_stopped',
                                      stop_reason='no_significant_validation_improvement', stopped_update=completed)
                 summary.add_scalar('EarlyStopping/Bad Validations', selection['early_stopping']['bad_validations'], completed)
-                summary.add_scalar('Validation/Queue Length', report['aggregate']['Queue Length']['mean'], completed)
+                for metric in ('ATT', 'Queue Length', 'Trip Completion Rate'):
+                    value = report['aggregate'][metric]['mean']
+                    if value is not None and math.isfinite(value):
+                        summary.add_scalar('Validation/' + metric, value, completed)
                 for name, part in report.get('networks', {}).items():
-                    summary.add_scalar(f'Validation/{name}/Queue Length', part['aggregate']['Queue Length']['mean'], completed)
-                summary.add_scalar('Validation/Eligible', int(score is not None), completed)
-                print(f'[Validation] update={completed} eligible={score is not None} Queue Length={score} '
+                    for metric in ('ATT', 'Queue Length', 'Trip Completion Rate'):
+                        value = part['aggregate'][metric]['mean']
+                        if value is not None and math.isfinite(value):
+                            summary.add_scalar(f'Validation/{name}/{metric}', value, completed)
+                summary.add_scalar('Validation/Valid', int(score is not None), completed)
+                print(f'[Validation] update={completed} valid={score is not None} ATT={score} '
                       f'best_update={selection["best_update"]} reason={reason}', flush=True)
             if completed >= INPUT_PARAMS.MAX_EPISODES and selection['training_status'] == 'running':
                 selection.update(training_status='budget_exhausted', stopped_update=completed,
-                                 stop_reason='max_episodes' if selection['best_score'] is not None else 'no_eligible_model')
+                                 stop_reason='max_episodes' if selection['best_score'] is not None else 'no_valid_model')
             if selection['training_status'] == 'early_stopped' and window:
                 # An early stop may fall between TensorBoard summary windows.
                 # Flush the final partial window before committing the finished state.

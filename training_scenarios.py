@@ -83,7 +83,7 @@ def apply_schema(native_movement, native_phases, schema):
 
 
 def merge_validation(reports):
-    """Macro over network means; retain every episode for eligibility checks."""
+    """Macro over network means; retain every episode for ATT validity checks."""
     aggregate = {}
     metrics = next(iter(reports.values()))['aggregate']
     for metric in metrics:
