@@ -26,11 +26,30 @@ disppo:
 # Frozen for the run: keep unchanged when using --resume-run.
 clipping: fixed_clipping
 
+# J3: calibrated VAE KL + Free Nats + action-conditioned latent TD prediction.
+# false retains the existing training path; true enables the joint mechanism.
+# Independent of ppo_variant/clipping/AES. Frozen when resuming a run.
+advanced_vae: false
+advanced_vae_config:
+  # Fixed independent Grid5x5 calibration used in the J3 experiment.
+  # beta multiplies MEAN per-vector KL inside the existing VAE loss coefficient.
+  actor_kl_beta: 0.05337935120662157
+  critic_kl_beta: 0.05419863990588785
+  free_nats: 0.1  # nats per complete latent vector, not per dimension
+  latent_dim: 32
+  td_discount: 0.9  # auxiliary prediction horizon; PPO gamma stays unchanged
+  ema_decay: 0.99  # one target update after each complete PPO update
+  loss_coefficient: 0.001
+  variance_coefficient: 1.0
+  covariance_coefficient: 0.01
+  initialization_seed: 9017  # isolated from policy/training random streams
+  log_interval: 50  # extra backbone-gradient diagnostic; losses logged every update
+
 # Unicorn training only. Independent of ppo_variant and clipping.
 # false preserves the current fixed entropy coefficient 0.002 and training path.
 # true uses global AES; DisPPO supplies the mean of its sampled quantiles.
 # Frozen when resuming; AES changes training, not frozen-model evaluation.
-aes: true
+aes: false
 aes_config:
   q: 0.9
   ema_decay: 0.95
@@ -94,7 +113,7 @@ evaluation:
   algorithm: Unicorn
   # Use train_outputs/<algorithm>/<run>/models/best_model.pkl for both tests.
   # Relative paths start at this project root. Use null for rule-based methods.
-  checkpoint: train_outputs/Unicorn/Unicorn_20261123_225458_953825/models/best_model.pkl
+  checkpoint: train_outputs/Unicorn/Unicorn_20261124_233757_700020/models/best_model.pkl
   network: grid_network_5_5
   seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
   policy_seed: 21

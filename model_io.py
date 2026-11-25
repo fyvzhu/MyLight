@@ -4,7 +4,7 @@ from pathlib import Path
 import random
 import numpy as np
 import torch
-from parameters import INPUT_PARAMS, VALIDATION_PARAMS, NETWORK_PARAMS, AES_PARAMS, SCENARIO_PARAMS
+from parameters import INPUT_PARAMS, VALIDATION_PARAMS, NETWORK_PARAMS, AES_PARAMS, SCENARIO_PARAMS, ADVANCED_VAE_PARAMS
 
 FORMAT_VERSION = 1
 
@@ -47,6 +47,9 @@ def weights_snapshot(model, env, algorithm, completed_updates):
         if AES_PARAMS.ENABLED:
             from aes import VERSION
             payload['aes'] = {'version': VERSION, 'config': dict(AES_PARAMS.CONFIG)}
+        if ADVANCED_VAE_PARAMS.ENABLED:
+            from advanced_vae import VERSION
+            payload['advanced_vae']={'version':VERSION,'config':dict(ADVANCED_VAE_PARAMS.CONFIG)}
     return payload
 
 

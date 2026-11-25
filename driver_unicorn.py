@@ -83,9 +83,11 @@ def get_global_train_buffer(all_jobs):
     return global_buffer, global_metrics
 
 
-def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=True, entropy_scheduler=None):
+def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=True, entropy_scheduler=None, advanced_vae=None):
     if AES_PARAMS.ENABLED != (entropy_scheduler is not None):
         raise ValueError('AES flag and training entropy scheduler must agree')
+    if ADVANCED_VAE_PARAMS.ENABLED != (advanced_vae is not None):
+        raise ValueError('advanced_vae flag and training module must agree')
     co_train = NETWORK_PARAMS.CO_TRAIN
     k_epoch = NETWORK_PARAMS.K_EPOCH
     eps_clip = NETWORK_PARAMS.EPS_CLIP
@@ -121,11 +123,16 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
     clipping = PolicyClipping(NETWORK_PARAMS.CLIPPING, batch_log_p_old,
                               experience_buffers[-1] if NETWORK_PARAMS.CLIPPING == 'dppo_full_tv' else None,
                               eps_clip)
+    if advanced_vae is not None:
+        advanced_vae.begin_batch()
 
     for k in range(k_epoch):
         network.actor_optimizer.zero_grad()
 
-        policy, _, prediction, mu, logvar = network.forward(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, num_meta)
+        if advanced_vae is None:
+            policy, _, prediction, mu, logvar = network.forward(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, num_meta)
+        else:
+            policy, _, prediction, mu, logvar, deterministic_features = network.forward(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, num_meta, return_features=True)
         policy_dist = Categorical(policy)
         # Calculate policy loss
         log_p = policy_dist.log_prob(batch_actions)
@@ -140,6 +147,8 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         mu = mu.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, mu.size(-1))).reshape(mu.size(0), mu.size(1), -1)
         logvar = logvar.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, logvar.size(-1))).reshape(logvar.size(0), logvar.size(1), -1)
         vae_loss = torch.mean(torch.square(batch_target_prediction.reshape(prediction.size()) - prediction)) - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        if advanced_vae is not None:
+            vae_loss, vae_metrics = advanced_vae.vae_loss(prediction, mu, logvar, batch_target_prediction, 'actor')
 
         # Calculate contrastive loss for Actor network based on NT-Xent contrastive loss
         a_cl_loss = 0
@@ -190,11 +199,18 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
 
         # Update actor network
         network.actor_optimizer.zero_grad()
-        (policy_loss - el_factor * entropy_loss + pl_factor * vae_loss + cl_factor * a_cl_loss).backward()
+        actor_loss = policy_loss - el_factor * entropy_loss + pl_factor * vae_loss + cl_factor * a_cl_loss
+        if advanced_vae is not None:
+            actor_loss = actor_loss + advanced_vae.auxiliary_loss('actor', deterministic_features,
+                batch_obs, batch_phase_vec, batch_phase_mask, batch_actions, batch_target_prediction,
+                batch_neighbor_actions_vec, vae_metrics)
+        actor_loss.backward()
         if grad_clip is not None:
             actor_norm = torch.nn.utils.clip_grad_norm_(network.actor_network.parameters(), grad_clip)
         else:
             actor_norm = get_gard_norm(network.actor_network.parameters())
+        if advanced_vae is not None:
+            advanced_vae.clip('actor')
         network.actor_optimizer.step()
 
         clip_frac = clip_mask
@@ -209,7 +225,10 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
 
     for k in range(k_epoch):
         network.critic_optimizer.zero_grad()
-        values, _, prediction, mu, logvar = network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, batch_neighbor_actions_vec, num_meta)
+        if advanced_vae is None:
+            values, _, prediction, mu, logvar = network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, batch_neighbor_actions_vec, num_meta)
+        else:
+            values, _, prediction, mu, logvar, deterministic_features = network.forward_v(batch_obs, batch_phase_vec, batch_int_attr_vec, batch_phase_mask, None, batch_neighbor_actions_vec, num_meta, return_features=True)
 
         # Calculate value loss
         if distributional:
@@ -227,6 +246,8 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         mu = mu.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, mu.size(-1))).reshape(mu.size(0), mu.size(1), -1)
         logvar = logvar.gather(2, batch_actions.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, logvar.size(-1))).reshape(logvar.size(0), logvar.size(1), -1)
         vae_loss = torch.mean(torch.square(batch_target_prediction.reshape(prediction.size()) - prediction)) - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        if advanced_vae is not None:
+            vae_loss, vae_metrics = advanced_vae.vae_loss(prediction, mu, logvar, batch_target_prediction, 'critic')
 
         # Calculate contrastive loss for Critic network
         c_cl_loss = 0
@@ -277,7 +298,12 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
 
         # Backward
         network.critic_optimizer.zero_grad()
-        (vl_factor * value_loss + pl_factor * vae_loss + cl_factor * c_cl_loss).backward()
+        critic_loss = vl_factor * value_loss + pl_factor * vae_loss + cl_factor * c_cl_loss
+        if advanced_vae is not None:
+            critic_loss = critic_loss + advanced_vae.auxiliary_loss('critic', deterministic_features,
+                batch_obs, batch_phase_vec, batch_phase_mask, batch_actions, batch_target_prediction,
+                batch_neighbor_actions_vec, vae_metrics)
+        critic_loss.backward()
 
         # Update critic network
         if grad_clip is not None:
@@ -285,6 +311,8 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         else:
             critic_norm = get_gard_norm(network.critic_network.parameters())
 
+        if advanced_vae is not None:
+            advanced_vae.clip('critic')
         network.critic_optimizer.step()
 
         v_l += convert_to_item(value_loss)
@@ -292,6 +320,8 @@ def calculate_gradients_ma_ppo(network, device, experience_buffers, norm_adv=Tru
         c_v_l += convert_to_item(vae_loss)
         c_c_l += convert_to_item(c_cl_loss)
 
+    if advanced_vae is not None:
+        advanced_vae.finish_batch(k_epoch)
     return (p_l / k_epoch, v_l / k_epoch, e_l / k_epoch, a_gn / k_epoch, c_gn / k_epoch,
             c_f / k_epoch, a_v_l / k_epoch, c_v_l / k_epoch, a_c_l / k_epoch, c_c_l / k_epoch)
 

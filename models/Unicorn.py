@@ -207,7 +207,7 @@ class ActorNet(nn.Module):
             nn.Linear(hidden_dim*2, 1),
         )
 
-    def forward(self, state, phase_vector, int_vector, mask, h_n, num_meta):
+    def forward(self, state, phase_vector, int_vector, mask, h_n, num_meta, return_features=False):
         # State normalization
         # [b*n, flat_dim]
         state = state.reshape(-1, self.flat_dim)
@@ -251,6 +251,7 @@ class ActorNet(nn.Module):
         prediction = prediction.reshape(batch_dim, self.agent_dim*num_meta, -1, self.flat_dim)
 
         # [b, n, max_a_dim]
+        deterministic_embedding = state_embedding
         state_embedding = torch.cat((state_embedding, z), -1)
         state_embedding = self.policy_layer(state_embedding).reshape(batch_dim, self.agent_dim * num_meta, -1)
         # Mask
@@ -258,7 +259,8 @@ class ActorNet(nn.Module):
         state_embedding[mask.bool()] = -np.inf
         policy = F.softmax(state_embedding, -1)
 
-        return policy, h_n, prediction, mu.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim), logvar.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim)
+        result = (policy, h_n, prediction, mu.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim), logvar.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim))
+        return (*result, deterministic_embedding) if return_features else result
 
 
 class CriticNet(nn.Module):
@@ -328,7 +330,7 @@ class CriticNet(nn.Module):
                     hidden_dim * 2, disppo_config['num_quantiles'],
                     disppo_config['initial_quantile_spacing'])
 
-    def forward(self, state, phase_vector, int_vector, mask, h_n, neighbor_action_vector, num_meta):
+    def forward(self, state, phase_vector, int_vector, mask, h_n, neighbor_action_vector, num_meta, return_features=False):
         # State normalization
         # [b*n, d_s]
         state = state.reshape(-1, self.flat_dim)
@@ -384,6 +386,7 @@ class CriticNet(nn.Module):
         state_embedding = self.decoder_a(state_embedding, neighbor_a_embedding)
 
         # [b, n, 1]
+        deterministic_embedding = state_embedding
         state_embedding = torch.cat((state_embedding, z), -1)
         mask = mask.reshape(batch_dim, self.agent_dim*num_meta, -1)
         # Keep the entire original scalar MLP and legal-phase sum in both
@@ -402,7 +405,8 @@ class CriticNet(nn.Module):
             pooled = phase_features.masked_fill(invalid, 0).sum(-2) / count
             value = value + self.quantile_head(pooled)
 
-        return value, h_n, prediction, mu.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim), logvar.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim)
+        result = (value, h_n, prediction, mu.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim), logvar.reshape(batch_dim, self.agent_dim*num_meta, -1, self.vae_hidden_dim))
+        return (*result, deterministic_embedding) if return_features else result
 
 
 class Unicorn(nn.Module):
@@ -432,11 +436,11 @@ class Unicorn(nn.Module):
         self.actor_optimizer = optim.Adam(self.actor_network.parameters(), lr=self.actor_lr)
         self.critic_optimizer = optim.Adam(self.critic_network.parameters(), lr=self.critic_lr)
 
-    def forward(self, state, phase_vector, int_vector, mask, h_n, num_meta=1):
-        return self.actor_network(state, phase_vector, int_vector, mask, h_n, num_meta)
+    def forward(self, state, phase_vector, int_vector, mask, h_n, num_meta=1, return_features=False):
+        return self.actor_network(state, phase_vector, int_vector, mask, h_n, num_meta, return_features=return_features)
 
-    def forward_v(self, state, phase_vector, int_vector, mask, h_n, neighbor_actions, num_meta=1):
-        return self.critic_network(state, phase_vector, int_vector, mask, h_n, neighbor_actions, num_meta)
+    def forward_v(self, state, phase_vector, int_vector, mask, h_n, neighbor_actions, num_meta=1, return_features=False):
+        return self.critic_network(state, phase_vector, int_vector, mask, h_n, neighbor_actions, num_meta, return_features=return_features)
 
 
 if __name__ == '__main__':

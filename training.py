@@ -17,7 +17,7 @@ import ray
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import parameters as settings
-from parameters import INPUT_PARAMS, TRAIN_PARAMS, NETWORK_PARAMS, SUMO_PARAMS, VALIDATION_PARAMS, EVALUATION_PARAMS, AES_PARAMS
+from parameters import INPUT_PARAMS, TRAIN_PARAMS, NETWORK_PARAMS, SUMO_PARAMS, VALIDATION_PARAMS, EVALUATION_PARAMS, AES_PARAMS, ADVANCED_VAE_PARAMS
 from evaluation import seed_policy
 from early_stopping import initial_state, observe_validation
 from model_io import atomic_save, capture_rng, restore_rng, weights_snapshot, load_weights, scenario_metadata
@@ -38,6 +38,9 @@ def training_contract(algorithm):
         contract['aes'] = {'version': VERSION, 'config': dict(AES_PARAMS.CONFIG)}
     if INPUT_PARAMS.CO_TRAIN:
         contract['scenarios'] = scenario_metadata()
+    if ADVANCED_VAE_PARAMS.ENABLED:
+        from advanced_vae import VERSION
+        contract['advanced_vae']={'version':VERSION,'config':dict(ADVANCED_VAE_PARAMS.CONFIG)}
     return contract
 
 
@@ -135,6 +138,8 @@ def commit(run, payload):
 
 
 def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=None):
+    if ADVANCED_VAE_PARAMS.ENABLED and algorithm != 'Unicorn':
+        raise ValueError('advanced_vae applies only to Unicorn')
     if AES_PARAMS.ENABLED and algorithm != 'Unicorn':
         raise ValueError('aes=true currently applies to the Unicorn driver only')
     if settings.JOB_TYPE != settings.JOB_OPTIONS.GET_EXPERIENCE or NETWORK_PARAMS.UPDATE_TYPE != 'PPO_MAC':
@@ -174,6 +179,11 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
     model = Model(input_dim=env.tls_obs_space, agent_dim=env.tls_all_agent_space,
                   int_vec_dim=env.tls_int_attr_space, actor_lr=NETWORK_PARAMS.A_LR_Q,
                   critic_lr=NETWORK_PARAMS.C_LR_Q).to(device)
+    advanced_vae = None
+    if ADVANCED_VAE_PARAMS.ENABLED:
+        from advanced_vae import AdvancedVAE
+        advanced_vae=AdvancedVAE(model,ADVANCED_VAE_PARAMS.CONFIG)
+        print('Advanced VAE:',dict(ADVANCED_VAE_PARAMS.CONFIG),flush=True)
     completed, window = 0, []
     if checkpoint is not None:
         load_weights(candidates[-1], model, env, algorithm, device)
@@ -181,6 +191,10 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         for optimizer, saved in zip((model.actor_optimizer, model.critic_optimizer), state['optimizers']):
             optimizer.load_state_dict(saved)
         completed, window = checkpoint['completed_updates'], state['summary_window']
+        if advanced_vae is not None:
+            advanced_vae.load_state_dict(state.get('advanced_vae'),NETWORK_PARAMS.K_EPOCH)
+            if advanced_vae.completed_updates != completed:
+                raise ValueError('Advanced VAE clock differs from committed updates')
         selection = state['selection']
         # Ignore/remove validation artifacts from work after the last commit.
         for child in (run.root / 'validation').glob('update_*'):
@@ -205,6 +219,8 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
         return run
     if entropy_scheduler is not None:
         prepare_aes_log(run.root / 'aes.jsonl', completed)
+    if advanced_vae is not None:
+        prepare_aes_log(run.root / 'advanced_vae.jsonl', completed)
     initial_rng = capture_rng()
     workers = []
     summary = None
@@ -240,6 +256,8 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                 'summary_window': window, 'selection': selection}
             if entropy_scheduler is not None:
                 payload['training_state']['aes'] = entropy_scheduler.state_dict()
+            if advanced_vae is not None:
+                payload['training_state']['advanced_vae']=advanced_vae.state_dict()
             summary.flush()
             commit(run, payload)
 
@@ -261,13 +279,24 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                     summary.add_scalar(f'Training/{name}/Reward', sum(j[1][0] for j in group)/len(group), completed+1)
                     summary.add_scalar(f'Training/{name}/JunctionTransitions',
                                        sum(j[0][0][0].shape[0]*j[2]['agents'] for j in group), completed+1)
-            if entropy_scheduler is not None:
+            if advanced_vae is not None:
+                if entropy_scheduler is not None:
+                    entropy_scheduler.begin_batch(torch.cat([job[2]['aes_td'] for job in jobs], dim=1))
+                train_metrics=update(network=model,device=device,experience_buffers=buffers,
+                    entropy_scheduler=entropy_scheduler,advanced_vae=advanced_vae)
+            elif entropy_scheduler is not None:
                 entropy_scheduler.begin_batch(torch.cat([job[2]['aes_td'] for job in jobs], dim=1))
                 train_metrics = update(network=model, device=device, experience_buffers=buffers,
                                        entropy_scheduler=entropy_scheduler)
             else:
                 train_metrics = update(network=model, device=device, experience_buffers=buffers)
             completed += 1
+            if advanced_vae is not None:
+                diagnostics=advanced_vae.diagnostics()
+                for name,value in diagnostics.items():
+                    summary.add_scalar('AdvancedVAE/'+name,value,completed)
+                with (run.root/'advanced_vae.jsonl').open('a') as stream:
+                    stream.write(json.dumps({'completed_updates':completed,**diagnostics},allow_nan=False)+'\n')
             if entropy_scheduler is not None:
                 diagnostics = entropy_scheduler.diagnostics(NETWORK_PARAMS.K_EPOCH)
                 for name, value in diagnostics.items():
@@ -281,6 +310,7 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                 window = []
             if TRAIN_PARAMS.RESET_OPTIM and completed % TRAIN_PARAMS.RESET_OPTIM_STEP == 0:
                 model.reset_optimizer()
+                if advanced_vae is not None:advanced_vae.attach_optimizers()
             validate_now = completed % VALIDATION_PARAMS.INTERVAL == 0 or completed == INPUT_PARAMS.MAX_EPISODES
             if validate_now:
                 # Validate exactly the weights produced by this update.

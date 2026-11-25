@@ -11,15 +11,20 @@ else:
     with _Path(__file__).with_name('config.yaml').open() as _config_file:
         _config = _yaml.safe_load(_config_file)
 from aes import DEFAULT_CONFIG as _aes_defaults, validate_config as _validate_aes
+from advanced_vae import DEFAULT_CONFIG as _advanced_defaults, validate_config as _validate_advanced
 # Older frozen settings predate AES. Missing new fields retain the disabled path.
 if isinstance(_config, dict):
-    _config = {'aes': False, 'aes_config': dict(_aes_defaults), **_config}
-if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'ppo_variant', 'disppo', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping', 'aes', 'aes_config'}
+    _config = {'aes': False, 'aes_config': dict(_aes_defaults), 'advanced_vae':False,
+               'advanced_vae_config':dict(_advanced_defaults), **_config}
+if (not isinstance(_config, dict) or set(_config) != {'sumo', 'max_episodes', 'clipping', 'ppo_variant', 'disppo', 'training', 'validation', 'checkpoints', 'evaluation', 'early_stopping', 'aes', 'aes_config','advanced_vae','advanced_vae_config'}
         or not isinstance(_config['sumo'], dict) or set(_config['sumo']) != {'backend'}):
     raise ValueError('config.yaml has missing/unknown fields; expected training, evaluation, PPO and AES settings')
 if type(_config['aes']) is not bool:
     raise ValueError('aes must be a YAML boolean true or false')
 _aes_config = _validate_aes(_config['aes_config'])
+if type(_config['advanced_vae']) is not bool:
+    raise ValueError('advanced_vae must be a YAML boolean true or false')
+_advanced_config=_validate_advanced(_config['advanced_vae_config'])
 _ppo_variant = _config['ppo_variant']
 if _ppo_variant not in ('unicorn', 'disppo'):
     raise ValueError('ppo_variant must be unicorn or disppo')
@@ -112,6 +117,11 @@ if (type(_early_stopping['min_relative_improvement']) not in (int, float)
 class AES_PARAMS:
     ENABLED = _config['aes']
     CONFIG = _aes_config
+
+
+class ADVANCED_VAE_PARAMS:
+    ENABLED = _config['advanced_vae']
+    CONFIG = _advanced_config
 
 
 class SCENARIO_PARAMS:
