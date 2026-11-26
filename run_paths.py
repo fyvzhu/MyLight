@@ -77,6 +77,7 @@ class RunPaths:
                           network=_public(settings.NETWORK_PARAMS),
                           validation=_public(settings.VALIDATION_PARAMS),
                           early_stopping=_public(settings.EARLY_STOPPING_PARAMS),
+                          convergence=_public(settings.CONVERGENCE_PARAMS),
                           test_seeds=settings.EVALUATION_PARAMS.SEEDS)
             if settings.INPUT_PARAMS.CO_TRAIN:
                 from model_io import scenario_metadata

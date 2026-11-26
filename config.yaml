@@ -77,7 +77,7 @@ training:
 validation:
   # Validate every training network after this many completed PPO updates.
   # Also validates at the final update; each validation commits a resumable checkpoint.
-  interval: 200
+  interval: 100
   seeds: [21001, 21002, 21003, 21004, 21005]
   policy_seed: 2026
   max_steps: 3600
@@ -86,6 +86,14 @@ validation:
   # Joint mode gives each training-network mean equal weight. Test data never select.
   # Every network/seed needs completed trips and finite positive ATT.
   metric: ATT
+
+# Retrospective T-REX-inspired analysis; does not stop or change training.
+# Windows count validation observations (100 PPO updates apart by default).
+convergence:
+  smoothing_window: 3
+  final_window: 5
+  relative_tolerance: 0.05
+  minimum_stable_updates: 500
 
 early_stopping:
   enabled: false
@@ -111,7 +119,7 @@ evaluation:
   algorithm: Unicorn
   # Use train_outputs/<algorithm>/<run>/models/best_model.pkl for both tests.
   # Relative paths start at this project root. Use null for rule-based methods.
-  checkpoint: train_outputs/Unicorn/Unicorn_20261124_233757_700020/models/best_model.pkl
+  checkpoint: train_outputs/Unicorn/Unicorn_20261125_220214_155994/models/best_model.pkl
   network: grid_network_5_5
   seeds: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900]
   policy_seed: 21
@@ -132,6 +140,10 @@ evaluation:
 #   models/sampling_weights.pth         internal worker exchange; overwritten
 #   validation/update_XXXXXXXX/         candidate validation CSVs + metrics
 #   validation/selection.json           all validation scores and selection decisions
+#   convergence/learning_data.json      standalone source data for analysis/plots
+#   convergence/summary.json            empirical Tc/CR/FPD, or explicit failure reason
+#   convergence/learning_curve.png      regenerated with python convergence.py --input <learning_data.json>
+#   convergence/training_rewards.jsonl  per-update rewards; rolled back on resume
 #   tensorboard/                        training and validation curves
 #   simulation/                         per-worker training simulation outputs
 # Early-stop counters and stop reason are committed with the training checkpoint.

@@ -93,6 +93,12 @@ Joint validation therefore costs more simulation time than validating one map.
 TensorBoard includes per-network training reward/sample counts and validation
 ATT, Queue Length and Trip Completion Rate, alongside training and AES diagnostics.
 
+After training, both learning drivers export `convergence/learning_data.json`,
+`summary.json` and `learning_curve.png`. Joint runs also export a separate PNG
+and convergence result for every training network. The default validation
+interval is 100 completed PPO updates. See `CONVERGENCE.md` for the empirical
+stability protocol and the standalone command to recreate PNGs from saved data.
+
 Evaluation and checkpoint compatibility
 ---------------------------------------
 

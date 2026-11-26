@@ -20,6 +20,7 @@ import parameters as settings
 from parameters import INPUT_PARAMS, TRAIN_PARAMS, NETWORK_PARAMS, SUMO_PARAMS, VALIDATION_PARAMS, EVALUATION_PARAMS, AES_PARAMS, ADVANCED_VAE_PARAMS
 from evaluation import seed_policy
 from early_stopping import initial_state, observe_validation
+from convergence import prepare_reward_log, append_reward, finish as finish_convergence
 from model_io import atomic_save, capture_rng, restore_rng, weights_snapshot, load_weights, scenario_metadata
 from run_paths import RunPaths, PROJECT_ROOT, project_path, _public
 from utils import set_env
@@ -143,6 +144,26 @@ def commit(run, payload):
     print(f"[Checkpoint] committed update={payload['completed_updates']} -> {path}", flush=True)
 
 
+def output_convergence(run, algorithm, completed, selection):
+    metadata = {'algorithm': algorithm, 'run_name': run.root.name,
+                'training_seed': TRAIN_PARAMS.SEED, 'training_mode': settings.SCENARIO_PARAMS.MODE,
+                'networks': [item['name'] for item in settings.SCENARIO_PARAMS.NETWORKS],
+                'worker_plan': [dict(item) for item in settings.SCENARIO_PARAMS.NETWORKS],
+                'completed_updates': completed, 'budget_updates': INPUT_PARAMS.MAX_EPISODES,
+                'validation_interval': VALIDATION_PARAMS.INTERVAL,
+                'validation_seeds': list(VALIDATION_PARAMS.SEEDS),
+                'validation_policy_seed': VALIDATION_PARAMS.POLICY_SEED,
+                'validation_max_steps': VALIDATION_PARAMS.MAX_STEPS,
+                'training_status': selection['training_status'], 'stop_reason': selection['stop_reason'],
+                'ppo_variant': NETWORK_PARAMS.PPO_VARIANT if algorithm == 'Unicorn' else None,
+                'clipping': NETWORK_PARAMS.CLIPPING, 'aes': AES_PARAMS.ENABLED,
+                'advanced_vae': ADVANCED_VAE_PARAMS.ENABLED}
+    report = finish_convergence(run.root, selection, settings.CONVERGENCE_PARAMS.CONFIG, metadata)
+    print(f'[Convergence] {report["overall"]["status"]}; '
+          f'estimated update={report["overall"]["estimated_convergence_update"]}; '
+          f'see {run.root / "convergence/summary.json"}', flush=True)
+
+
 def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=None):
     if ADVANCED_VAE_PARAMS.ENABLED and algorithm != 'Unicorn':
         raise ValueError('advanced_vae applies only to Unicorn')
@@ -214,7 +235,10 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                      'best_score': None, 'best_update': None, 'best_weights': None, 'history': [],
                      'early_stopping': initial_state(), 'training_status': 'running',
                      'stop_reason': None, 'stopped_update': None}
+    reward_path = run.root / 'convergence/training_rewards.jsonl'
+    prepare_reward_log(reward_path, completed)
     if selection['training_status'] != 'running' or completed >= INPUT_PARAMS.MAX_EPISODES:
+        output_convergence(run, algorithm, completed, selection)
         print(f'[Training] already finished ({selection["stop_reason"]}); '
               'no updates or validation repeated', flush=True)
         return run
@@ -292,6 +316,12 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
             else:
                 train_metrics = update(network=model, device=device, experience_buffers=buffers)
             completed += 1
+            network_rewards = {}
+            for item in settings.SCENARIO_PARAMS.NETWORKS:
+                group = ([job for job in jobs if job[2]['network'] == item['name']]
+                         if INPUT_PARAMS.CO_TRAIN else jobs)
+                network_rewards[item['name']] = sum(float(job[1][0]) for job in group) / len(group)
+            append_reward(reward_path, completed, metrics[0], network_rewards)
             if advanced_vae is not None:
                 diagnostics=advanced_vae.diagnostics()
                 for name,value in diagnostics.items():
@@ -365,6 +395,7 @@ def train(algorithm, Model, Runner, combine, update, log_metrics, resume_run=Non
                       f'consecutive validations without significant improvement={selection["early_stopping"]["bad_validations"]}; '
                       f'best_update={selection["best_update"]}', flush=True)
                 break
+        output_convergence(run, algorithm, completed, selection)
         print(f'[Training] finished ({selection["stop_reason"]}); best update={selection["best_update"]}; '
               f'see {run.root / "validation/selection.json"}', flush=True)
         return run

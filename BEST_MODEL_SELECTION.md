@@ -30,7 +30,7 @@ Suggested methods description:
 
 ```yaml
 validation:
-  interval: 200
+  interval: 100
   seeds: [21001, 21002, 21003, 21004, 21005]
   policy_seed: 2026
   max_steps: 3600
