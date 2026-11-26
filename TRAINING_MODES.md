@@ -134,3 +134,20 @@ supported by the Unicorn driver only; HeteroLight requires `aes: false`.
 No runtime module imports `tests` or the downloaded reference repositories.
 The feature uses the existing Python/PyTorch/NumPy/PyYAML/Ray/SUMO environment;
 no new dependency installation is required.
+
+Detector log storage
+--------------------
+
+`output_ild: false` redirects detector outputs named
+`ild.out` to the system null device. `true` writes them into each simulation
+workspace. This applies to training, fixed-policy validation and both evaluation
+entry points, including single/joint training and both SUMO backends. Detector
+definitions, IDs and real-time readings remain active. This flag does not
+control differently named detector outputs such as `e1output.xml`/`e2output.xml`.
+CSV, TripInfo, metrics, TensorBoard, models and convergence data remain available.
+
+The original maps are never edited. Reused workspace detector copies are updated
+from the source definition, so the setting also works after a process restart.
+Existing ild.out files are not deleted when switching off. A run's config snapshot
+records its initial output setting; old settings without the key preserve their
+historical enabled behavior. No new dependency is needed.

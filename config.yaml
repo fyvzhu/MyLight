@@ -1,6 +1,11 @@
 # Number of complete sampling + PPO update rounds (each round uses all workers).
 max_episodes: 2500
 
+# Save SUMO detector logs named ild.out during sampling, validation and evaluation.
+# false discards only their file output; detectors and live measurements remain active.
+# Existing files are not deleted. Other outputs (CSV, TripInfo, metrics, etc.) remain.
+output_ild: true
+
 # Unicorn training module: unicorn (scalar Critic) or disppo (quantile Critic).
 # Shared Actor, simulator, auxiliary losses and training/validation lifecycle.
 # Both use corrected (A - mean(A)) / (std(A) + eps) advantage normalization.

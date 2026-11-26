@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import hashlib
+import os
 import re
 import xml.etree.ElementTree as ET
 import yaml
@@ -69,7 +70,8 @@ class RunPaths:
             sumo['NET_NAME'] = settings.EVALUATION_PARAMS.NETWORK
         sumo['NET_PATH'] = str(PROJECT_ROOT / 'maps' / sumo['NET_NAME'])
         sumo['CONFIG_PATH'] = str(Path(sumo['NET_PATH']) / f"{sumo['NET_NAME']}_config.json")
-        config = {'stage': self.stage, 'algorithm': self.algorithm, 'run_dir': str(self.root), 'sumo': sumo}
+        config = {'stage': self.stage, 'algorithm': self.algorithm, 'run_dir': str(self.root), 'sumo': sumo,
+                  'output_ild': settings.OUTPUT_PARAMS.OUTPUT_ILD}
         if self.stage == 'train':
             config.update(settings=settings._config, max_episodes=settings.INPUT_PARAMS.MAX_EPISODES,
                           sampling_runtime_env=dict(settings.SAMPLING_RUNTIME_ENV),
@@ -103,7 +105,7 @@ class RunPaths:
 
 
 def prepare_simulation(source, workspace):
-    """Reference static inputs and isolate generated routes, detector and XML outputs."""
+    """Isolate outputs and apply the ild.out switch without removing detectors."""
     source, workspace = Path(source), Path(workspace)
     if workspace.resolve().is_relative_to(PROJECT_ROOT / 'maps'):
         raise ValueError('Simulation output must be outside the original maps directory')
@@ -119,7 +121,10 @@ def prepare_simulation(source, workspace):
                 or dynamic and name == source.name + '.rou.xml'):
             continue
         target = workspace / name
-        if target.exists():
+        # Recheck detector copies when reusing a workspace (e.g. on resume).
+        # Large static network/route symlinks still use the fast existing path.
+        if target.exists() and (path.suffix != '.xml'
+                                or target.is_symlink() and not name.endswith('.add.xml')):
             continue
         if path.suffix == '.xml':
             tree = ET.parse(path)
@@ -129,10 +134,18 @@ def prepare_simulation(source, workspace):
             if outputs:
                 for node in outputs:
                     value = node.get('file')
-                    if value not in ('NUL', '/dev/null', 'stdout', 'stderr'):
+                    if Path(value).name == 'ild.out' and not settings.OUTPUT_PARAMS.OUTPUT_ILD:
+                        node.set('file', os.devnull)
+                    elif value not in ('NUL', '/dev/null', 'stdout', 'stderr'):
                         node.set('file', str(workspace / Path(value).name))
-                tree.write(target, encoding='utf-8', xml_declaration=True)
+                content = ET.tostring(tree.getroot(), encoding='utf-8', xml_declaration=True)
+                if target.is_symlink() or not target.exists() or target.read_bytes() != content:
+                    temporary = target.with_name(target.name + '.tmp')
+                    temporary.write_bytes(content)
+                    temporary.replace(target)
                 continue
+        if target.exists():
+            continue
         target.symlink_to(path.resolve())
 
 
